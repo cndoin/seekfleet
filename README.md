@@ -1,100 +1,102 @@
+<div align="center">
+
+<img src="./docs/og.png" alt="SeekFleet — Run agents like a fleet" width="100%" />
+
 # SeekFleet
 
-> A cross-platform control plane for DeepSeek Harness agent fleets.
+### Run agents like a fleet.
 
-SeekFleet lets AI clients run, route, monitor, budget, and stop DeepSeek Harness agents through one TypeScript SDK and one MCP server. It includes durable sessions, adaptive clusters, DAG scheduling, policy enforcement, token and cost accounting, failure isolation, and a phone-friendly LAN dashboard.
+Cross-platform control plane for DeepSeek Harness agent fleets — with MCP, durable sessions, adaptive routing, policy gates, token budgets, and a phone-friendly LAN dashboard.
 
-[Documentation](./INSTALL.md) · [Agent Skill](./SKILL.md) · [Security](./SECURITY.md) · [Contributing](./CONTRIBUTING.md)
+<p>
+  <a href="https://cndoin.github.io/seekfleet/">Live product page</a> ·
+  <a href="./INSTALL.md">AI installation contract</a> ·
+  <a href="./SKILL.md">Agent Skill</a> ·
+  <a href="./SECURITY.md">Security</a>
+</p>
 
-## Why SeekFleet
+<p>
+  <a href="https://github.com/cndoin/seekfleet/actions/workflows/ci.yml"><img src="https://github.com/cndoin/seekfleet/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/cndoin/seekfleet/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cndoin/seekfleet?color=42dce8" alt="MIT License" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D20-43e0a2" alt="Node.js 20 or newer" /></a>
+  <a href="https://github.com/cndoin/seekfleet/commits/main"><img src="https://img.shields.io/github/last-commit/cndoin/seekfleet?color=648bff" alt="Last commit" /></a>
+</p>
 
-- **AI-native:** 20 structured MCP tools with stable envelopes and annotations.
-- **Controllable:** cancellation, finite timeouts, cost budgets, policies, and circuit breakers.
-- **Observable:** live agent state, requests, tokens, cost, failures, cache ratio, and metrics.
-- **Resilient:** durable sessions, bounded streams, atomic state, process-tree cleanup, and graceful draining.
-- **Cross-platform:** Windows, Linux, and macOS on Node.js 20+.
-- **Easy to teach:** ships as an Agent Skill for Codex, Claude, Cursor, Gemini, and open `.agents` clients.
+</div>
+
+> Give an AI the repository URL. It can install the Skill, configure MCP, verify the runtime, and explain exactly what changed.
+
+## The 30-second version
+
+SeekFleet turns DeepSeek Harness from a collection of processes into an observable, governable fleet:
+
+| Surface | What it gives you |
+| --- | --- |
+| **MCP server** | 20 structured tools with stable envelopes and annotations |
+| **SDK** | One TypeScript API for one-shot tasks, sessions, clusters, and DAGs |
+| **Control plane** | Routing, cache, circuit breakers, budgets, policies, and cancellation |
+| **LAN dashboard** | Live agents, requests, tokens, cost, failures, sessions, and protected controls |
+| **Agent Skill** | One deterministic install path for Codex, Claude, Cursor, Gemini, and `.agents` clients |
 
 ## Give this repository to an AI
 
-After the repository is published, send your AI this single instruction:
+Copy this prompt as-is:
 
 ```text
-Install SeekFleet from https://github.com/cndoin/seekfleet. Read INSTALL.md in that repository first, install it for this AI client, configure its MCP server, and verify the installation without exposing credentials.
+Install SeekFleet from https://github.com/cndoin/seekfleet.
+Read INSTALL.md first, install it for this AI client, configure its MCP server,
+and verify the installation without exposing credentials.
 ```
 
-The AI-facing installation contract is intentionally kept in [INSTALL.md](./INSTALL.md). It contains deterministic Windows, Linux, and macOS steps plus verification and rollback.
+The machine-readable contract lives in [INSTALL.md](./INSTALL.md). It includes Windows PowerShell, Linux, and macOS paths, user/project Skill scopes, verification, update, and rollback behavior.
 
-## Quick installation
+## Install from source
 
-Requirements:
-
-- Node.js 20 or newer
-- npm 10 or newer
-- `@deepseek-ai/dsh`, or an explicit `DSH_MODULE_ROOT`
-
-Clone and build:
+Requirements: Node.js 20+, npm 10+, and `@deepseek-ai/dsh` or an explicit `DSH_MODULE_ROOT`.
 
 ```bash
 git clone https://github.com/cndoin/seekfleet seekfleet
 cd seekfleet
 npm ci
 npm run build
+node dist/bin/seekfleet.js skill install --target auto
+node dist/bin/seekfleet.js inspect
 ```
 
-Install the bundled Skill into detected AI clients:
+Install the Skill into every supported AI client:
 
 ```bash
-seekfleet skill install --target auto
+node dist/bin/seekfleet.js skill install --target all --force
 ```
 
-Install for every supported client profile:
+For a project-local Skill, use `--scope project`; it installs into `.agents/skills/seekfleet` without changing the user profile.
 
-```bash
-seekfleet skill install --target all --force
-```
-
-Supported targets are `agents`, `codex`, `claude`, `cursor`, and `gemini`. Use `--scope project` to install into `.agents/skills/seekfleet` for one repository.
-
-## Start the MCP server
-
-```bash
-seekfleet serve-mcp
-```
-
-For a source checkout:
+## Start the fleet
 
 ```bash
 node dist/bin/seekfleet.js serve-mcp
 ```
 
-The server exposes 20 tools covering inspection, one-shot tasks, profile management, clusters, DAGs, metrics, capability matching, and durable sessions. Tool names retain the `dsh_*` prefix for protocol compatibility.
-
-## Phone dashboard
-
-Run MCP and the LAN dashboard in the same process:
+Run MCP and the phone dashboard together on a trusted LAN:
 
 ```bash
-seekfleet serve-mcp --dashboard --dashboard-host 0.0.0.0 --dashboard-port 8787
+node dist/bin/seekfleet.js serve-mcp \
+  --dashboard \
+  --dashboard-host 0.0.0.0 \
+  --dashboard-port 8787
 ```
 
-Or from the repository:
+Open the printed URL on a phone connected to the same network. The dashboard is bearer-token protected; do not expose it directly to the public internet.
 
-```bash
-npm run serve-lan
-```
-
-Open the printed LAN URL on a phone connected to the same trusted network. Every data and control request requires a bearer token. Do not expose the dashboard directly to the public internet.
-
-## SDK
+## SDK at a glance
 
 ```ts
 import { SeekFleet } from "seekfleet";
 
 const fleet = new SeekFleet();
 
-const one = await fleet.run("Review this module for race conditions");
-console.log(one.answer);
+const review = await fleet.run("Review this module for race conditions");
+console.log(review.answer);
 
 const clusterId = fleet.cluster({
   routing: "adaptive",
@@ -114,12 +116,12 @@ const result = await fleet.clusterRoute(clusterId, {
 await fleet.clusterShutdown(clusterId);
 ```
 
-`DshPlugin` remains available as a deprecated alias for source compatibility.
+`DshPlugin` remains available as a deprecated source-compatibility alias. MCP tool names retain the `dsh_*` prefix so existing integrations keep working.
 
-## Execution modes
+## Choose your execution mode
 
 | Mode | Best for | Control surface |
-|---|---|---|
+| --- | --- | --- |
 | One-shot | One bounded task | `dsh_run` |
 | Session | Long-running, cancellable work | `dsh_session_*` |
 | Cluster | Parallel or repeated tasks | `dsh_cluster_*` |
@@ -169,7 +171,7 @@ Use OS-native absolute paths. Do not copy Windows drive paths into Linux or macO
 ## Environment variables
 
 | Variable | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `DSH_MODULE_ROOT` | auto-detected | Installed DeepSeek Harness package |
 | `DSH_HOME` | `~/.dsh` | Profiles and persistent runtime state |
 | `CODEX_HOME` | `~/.codex` | Codex configuration root |
@@ -179,6 +181,16 @@ Use OS-native absolute paths. Do not copy Windows drive paths into Linux or macO
 | `SEEKFLEET_DASHBOARD_TOKEN` | random | Fixed dashboard bearer token |
 
 The previous `DSH_DASHBOARD*` names remain accepted as compatibility aliases.
+
+## Project map
+
+- [`src/`](./src/) — SDK, routing, sessions, policies, metrics, dashboard, and MCP server
+- [`bin/seekfleet.ts`](./bin/seekfleet.ts) — cross-platform CLI entry point
+- [`SKILL.md`](./SKILL.md) — compact AI operating instructions
+- [`agents/openai.yaml`](./agents/openai.yaml) — AI client discovery metadata
+- [`docs/`](./docs/) — GitHub Pages product site and social preview asset
+- [`examples/`](./examples/) — MCP, SDK, adapter, and cluster examples
+- [`tests/`](./tests/) — 94 behavior and integration tests
 
 ## Development
 
@@ -191,7 +203,7 @@ npm test
 npm run build
 ```
 
-CI runs on Windows, Ubuntu, and macOS with Node.js 20, 22, and 24.
+CI runs on Windows, Ubuntu, and macOS with Node.js 20, 22, and 24. The live product page is published from [`docs/`](./docs/) by [GitHub Pages](https://github.com/cndoin/seekfleet/actions/workflows/pages.yml).
 
 ## Security
 
@@ -199,4 +211,4 @@ SeekFleet executes real agent tools and subprocesses. Configure policies, budget
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).

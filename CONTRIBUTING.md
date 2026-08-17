@@ -20,7 +20,7 @@ Requirements:
 Setup:
 
 ```bash
-git clone REPOSITORY_URL seekfleet
+git clone https://github.com/cndoin/seekfleet seekfleet
 cd seekfleet
 npm install
 npm run build
