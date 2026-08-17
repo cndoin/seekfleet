@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+yarn.lock
+package-lock.json.bak
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage / test output
+coverage/
+.nyc_output/
+*.lcov
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Editor / OS
+.idea/
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# DSH runtime state (user-local, never commit)
+.dsh-home/
+clusters.json
+
+# Replay files
+replays/
+*.dshreplay
+
+# Temporary
+*.tmp
+*.bak
+*.bak.*
+
+# Local debug scratch examples
+examples/*-debug*.mjs
+examples/check-cb.mjs
+examples/codex-patch-test.mjs
+examples/hist-debug.mjs
+examples/mcp-ping.mjs
+examples/policy-debug*.mjs
+
+# Tooling caches
+.cache/
+.eslintcache
+.prettiercache
+
+# Coverage
+vitest-report*/

@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN" data-repository="https://github.com/cndoin/seekfleet">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07111f" />
+    <meta
+      name="description"
+      content="SeekFleet — cross-platform control plane for DeepSeek Harness agent fleets."
+    />
+    <meta property="og:title" content="SeekFleet — Run agents like a fleet" />
+    <meta
+      property="og:description"
+      content="Route, monitor, budget, and stop DeepSeek Harness agents from any MCP-capable AI client."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="./og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>SeekFleet — Agent fleet control plane</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <header class="nav wrap">
+      <a class="brand" href="#top" aria-label="SeekFleet home">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span>SeekFleet</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#features">能力</a>
+        <a href="#install">安装</a>
+        <a href="#architecture">架构</a>
+        <a class="nav-cta" data-repo-link href="https://github.com/cndoin/seekfleet">GitHub</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero wrap">
+        <div class="hero-copy">
+          <div class="badge"><span></span> Windows · Linux · macOS</div>
+          <h1>Run agents<br />like a <em>fleet.</em></h1>
+          <p class="lead">
+            给 DeepSeek Harness Agent 一套真正可控的运行层。统一调度、监控、预算、策略、故障隔离与手机端控制台。
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install">交给 AI 安装</a>
+            <a class="button secondary" data-repo-link href="https://github.com/cndoin/seekfleet">查看源码 <span>↗</span></a>
+          </div>
+          <div class="proof-row" aria-label="Project highlights">
+            <span><b>20</b> MCP tools</span>
+            <span><b>5</b> routing modes</span>
+            <span><b>3</b> operating systems</span>
+          </div>
+        </div>
+
+        <div class="control-card" aria-label="SeekFleet live control preview">
+          <div class="window-head">
+            <div class="window-dots"><i></i><i></i><i></i></div>
+            <span>seekfleet / live</span>
+            <span class="live-pill"><i></i> LIVE</span>
+          </div>
+          <div class="fleet-summary">
+            <div><small>FLEET HEALTH</small><strong>98<span>%</span></strong></div>
+            <div class="health-ring"><span>12</span><small>agents</small></div>
+          </div>
+          <div class="metric-grid">
+            <div><small>RUNNING</small><b>04</b><span class="cyan">+2 now</span></div>
+            <div><small>TOKENS</small><b>284k</b><span>today</span></div>
+            <div><small>COST</small><b>$1.84</b><span>of $5.00</span></div>
+          </div>
+          <div class="agent-list">
+            <div class="agent-row"><i class="agent-state busy"></i><span><b>code-a</b><small>refactor auth flow</small></span><em>1 / 2</em></div>
+            <div class="agent-row"><i class="agent-state ready"></i><span><b>review</b><small>waiting for task</small></span><em>0 / 1</em></div>
+            <div class="agent-row"><i class="agent-state busy"></i><span><b>research</b><small>collecting sources</small></span><em>1 / 1</em></div>
+          </div>
+          <div class="event-line"><span>14:32:08</span><b>adaptive route</b><em>→ code-a</em></div>
+        </div>
+      </section>
+
+      <section class="trusted wrap" aria-label="Compatible clients">
+        <span>Works with</span>
+        <div><b>Codex</b><b>Claude</b><b>Cursor</b><b>Gemini</b><b>Hermes</b><b>OpenClaw</b></div>
+      </section>
+
+      <section class="section wrap" id="features">
+        <div class="section-heading">
+          <span class="kicker">CONTROL, NOT CHAOS</span>
+          <h2>不是多开几个进程。<br />是完整的 Agent 控制平面。</h2>
+          <p>从一次任务到长期运行的 Agent 集群，每一层都可观察、可限制、可停止。</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature feature-wide">
+            <div class="feature-icon route-icon"><i></i><i></i><i></i></div>
+            <div><span>01 / ROUTING</span><h3>Adaptive routing</h3><p>根据成功率、延迟、负载、标签、成本和近期故障，为每个任务选择更合适的 Agent。</p></div>
+            <div class="route-map"><i class="source"></i><i></i><i></i><i class="selected"></i></div>
+          </article>
+          <article class="feature">
+            <div class="feature-icon shield-icon">◇</div>
+            <span>02 / SAFETY</span><h3>Policy first</h3><p>限制路径、工具、网络、环境变量、运行时间与预算。策略失败不会被静默绕过。</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon pulse-icon"><i></i></div>
+            <span>03 / RESILIENCE</span><h3>Built to recover</h3><p>持久会话、断路器、排空缩容、原子状态与完整进程树终止。</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon graph-icon"><i></i><i></i><i></i></div>
+            <span>04 / WORKFLOWS</span><h3>DAG execution</h3><p>让独立节点并行，让依赖节点按序执行，并将上游结果安全传递给综合任务。</p>
+          </article>
+          <article class="feature feature-accent">
+            <div class="feature-icon phone-icon"><i></i></div>
+            <span>05 / ANYWHERE</span><h3>Your fleet, in your pocket</h3><p>局域网手机面板实时显示 Agent、任务、Token、成本、故障与缓存，并支持受保护的取消和关闭操作。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="install-section" id="install">
+        <div class="wrap install-layout">
+          <div class="install-copy">
+            <span class="kicker">ONE PROMPT INSTALL</span>
+            <h2>把网址给 AI。<br />剩下的交给它。</h2>
+            <p>SeekFleet 提供机器可读的安装契约。AI 会检查系统、构建项目、安装 Skill、配置 MCP，并完成验证。</p>
+            <ul>
+              <li><i>✓</i> 自动识别 Windows、Linux、macOS</li>
+              <li><i>✓</i> 支持用户级与项目级 Skill</li>
+              <li><i>✓</i> 安装、验证、更新、回滚全部有据可循</li>
+            </ul>
+          </div>
+          <div class="prompt-card">
+            <div class="prompt-head"><span>给你的 AI 发送</span><button class="copy-button" data-copy="ai-prompt">复制</button></div>
+            <pre id="ai-prompt"><code>Install SeekFleet from https://github.com/cndoin/seekfleet.
+Read INSTALL.md first, install it for this AI client,
+configure its MCP server, and verify the installation
+without exposing credentials.</code></pre>
+            <div class="prompt-foot"><span class="status-dot"></span><span>AI-installable repository</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section wrap" id="architecture">
+        <div class="section-heading compact">
+          <span class="kicker">ONE CONTROL PLANE</span>
+          <h2>接入任意 AI，控制同一套 Fleet。</h2>
+        </div>
+        <div class="architecture">
+          <div class="arch-clients">
+            <span>Codex</span><span>Claude</span><span>Cursor</span><span>Gemini</span>
+          </div>
+          <div class="arch-connector"><i></i><b>MCP / SDK</b><i></i></div>
+          <div class="arch-core">
+            <div class="core-mark"><span class="brand-mark"><i></i><i></i><i></i></span></div>
+            <div><small>CONTROL PLANE</small><strong>SeekFleet</strong></div>
+            <div class="core-features"><span>Sessions</span><span>Routing</span><span>Policies</span><span>Metrics</span></div>
+          </div>
+          <div class="arch-connector down"><i></i><b>PROCESS CONTROL</b><i></i></div>
+          <div class="arch-runtime"><span>DeepSeek Harness</span><small>profiles · tools · models · subprocesses</small></div>
+        </div>
+      </section>
+
+      <section class="tool-section wrap">
+        <div class="tool-copy"><span class="kicker">20 STRUCTURED TOOLS</span><h2>AI 不需要猜<br />下一步该做什么。</h2><p>每个 MCP 工具都带输入 Schema、行为注解和稳定响应结构。</p></div>
+        <div class="tool-cloud" aria-label="MCP tool examples">
+          <span>dsh_inspect</span><span>dsh_run</span><span>dsh_session_start</span><span>dsh_cluster_route</span><span>dsh_metrics</span><span>dsh_dag_run</span><span>dsh_session_cancel</span><span>dsh_capability_match</span>
+        </div>
+      </section>
+
+      <section class="final-cta wrap">
+        <div><span class="kicker">READY TO COMMAND</span><h2>Turn agents into a fleet.</h2><p>开源、跨平台、可控。现在把 SeekFleet 交给你的 AI。</p></div>
+        <div class="hero-actions"><a class="button primary" href="#install">复制安装指令</a><a class="button secondary" data-repo-link href="https://github.com/cndoin/seekfleet">GitHub <span>↗</span></a></div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <a class="brand" href="#top"><span class="brand-mark"><i></i><i></i><i></i></span><span>SeekFleet</span></a>
+      <p>Cross-platform control plane for DeepSeek Harness agent fleets.</p>
+      <span>MIT License</span>
+    </footer>
+
+    <div class="toast" role="status" aria-live="polite">已复制</div>
+  </body>
+</html>

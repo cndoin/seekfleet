@@ -1,0 +1,111 @@
+{
+  "schemaVersion": "1.0",
+  "name": "dsh-plugin-sdk",
+  "displayName": "DeepSeek Harness Plugin SDK",
+  "description": "AI-friendly plugin SDK for DeepSeek Harness. Single-instance, cluster, and MCP bridge for hermes/openclaw/Codex-style agent frameworks.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/dsh-plugin-sdk/dsh-plugin-sdk",
+  "license": "MIT",
+  "transport": {
+    "type": "stdio",
+    "command": "node",
+    "args": [
+      "dist/bin/dsh-plugin.js",
+      "serve-mcp"
+    ]
+  },
+  "capabilities": {
+    "tools": {
+      "listChanged": true
+    }
+  },
+  "tools": [
+    {
+      "name": "dsh_inspect",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_run",
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "dsh_run_stream",
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "dsh_profile_dump",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_profile_install",
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "dsh_cluster_create",
+      "annotations": {
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_cluster_route",
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "dsh_cluster_status",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_cluster_scale",
+      "annotations": {}
+    },
+    {
+      "name": "dsh_cluster_shutdown",
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_dag_run",
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "dsh_metrics",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "dsh_capability_match",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    }
+  ]
+}

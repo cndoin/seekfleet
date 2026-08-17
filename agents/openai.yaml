@@ -1,0 +1,4 @@
+interface:
+  display_name: "SeekFleet"
+  short_description: "Control and monitor DeepSeek agent fleets"
+  default_prompt: "Use $seekfleet to run this task with the safest efficient execution mode."

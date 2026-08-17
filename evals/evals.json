@@ -1,0 +1,7 @@
+[
+  {"prompt":"Run one short analysis task","expected_mode":"dsh_run"},
+  {"prompt":"Start a 20-minute research task and let me cancel it","expected_mode":"session"},
+  {"prompt":"Process 50 independent files with code agents","expected_mode":"cluster"},
+  {"prompt":"Research three topics, then synthesize their results","expected_mode":"dag"},
+  {"prompt":"Show the live agent cluster on my phone over local Wi-Fi","expected_mode":"lan-dashboard"}
+]

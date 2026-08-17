@@ -1,0 +1,110 @@
+{
+  "name": "seekfleet",
+  "version": "0.1.0",
+  "description": "Cross-platform control plane for DeepSeek Harness agent fleets, with MCP, durable sessions, budgets, policies, and a LAN dashboard.",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "bin": {
+    "seekfleet": "./dist/bin/seekfleet.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "agents",
+    "references",
+    "evals",
+    "INSTALL.md",
+    "docs",
+    "examples/cluster-demo.mjs",
+    "examples/ultimate-demo.mjs",
+    "examples/mcp-full.mjs",
+    "examples/mcp-list.mjs",
+    "examples/mcp-structured.mjs",
+    "examples/mcp-ultimate.mjs",
+    "examples/hermes-adapter.md",
+    "examples/openclaw-adapter.md",
+    "examples/codex-adapter.md",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "inspect": "node dist/bin/seekfleet.js inspect",
+    "run": "node dist/bin/seekfleet.js run",
+    "cluster": "node dist/bin/seekfleet.js cluster",
+    "serve-mcp": "node dist/bin/seekfleet.js serve-mcp",
+    "serve-lan": "node dist/bin/seekfleet.js serve-mcp --dashboard --dashboard-host 0.0.0.0",
+    "codex-install": "node dist/bin/seekfleet.js codex-install",
+    "codex-status": "node dist/bin/seekfleet.js codex-status",
+    "codex-uninstall": "node dist/bin/seekfleet.js codex-uninstall",
+    "demo": "node examples/cluster-demo.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chokidar": "^4.0.3",
+    "commander": "^15.0.0",
+    "smol-toml": "^1.3.0",
+    "split2": "^4.2.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10",
+    "eslint": "^10.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "prettier": "^3.0.0"
+  },
+  "license": "MIT",
+  "author": "SeekFleet contributors",
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "harness",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "ai-agents",
+    "agent-framework",
+    "plugin",
+    "sdk",
+    "cluster",
+    "openai-codex",
+    "hermes",
+    "openclaw",
+    "typescript",
+    "esm",
+    "ai"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest"
+  }
+}

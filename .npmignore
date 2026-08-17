@@ -1,0 +1,33 @@
+# Source files (only dist/ is published)
+src/
+tests/
+
+# Tooling
+.github/
+.vscode/
+.idea/
+
+# Configs
+.editorconfig
+.gitignore
+.npmignore
+tsconfig.json
+vitest.config.ts
+eslint.config.js
+.prettierrc
+
+# Demos / debug scripts (too noisy for end users)
+examples/codex-debug*.mjs
+examples/codex-patch-test.mjs
+examples/mcp-ping.mjs
+examples/toml-validate.mjs
+
+# Generated artifacts
+*.log
+*.tmp
+coverage/
+*.tsbuildinfo
+
+# DSH runtime state
+.dsh-home/
+replays/
