@@ -83,6 +83,14 @@
   },
   "license": "MIT",
   "author": "SeekFleet contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cndoin/seekfleet.git"
+  },
+  "homepage": "https://cndoin.github.io/seekfleet/",
+  "bugs": {
+    "url": "https://github.com/cndoin/seekfleet/issues"
+  },
   "keywords": [
     "deepseek",
     "dsh",
