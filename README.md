@@ -26,6 +26,18 @@ Cross-platform control plane for DeepSeek Harness agent fleets — with MCP, dur
 
 > Give an AI the repository URL. It can install the Skill, configure MCP, verify the runtime, and explain exactly what changed.
 
+## International overview
+
+The product page includes a persistent language switcher with five localized experiences: [简体中文](https://cndoin.github.io/seekfleet/), [English](https://cndoin.github.io/seekfleet/), [日本語](https://cndoin.github.io/seekfleet/), [한국어](https://cndoin.github.io/seekfleet/), and [Español](https://cndoin.github.io/seekfleet/). The page detects the browser language automatically and remembers the visitor's choice.
+
+| Language | Product summary |
+| --- | --- |
+| 简体中文 | 面向 DeepSeek Harness Agent 集群的跨平台控制平面，统一调度、监控、预算、策略与局域网控制台。 |
+| English | A cross-platform control plane for routing, observing, budgeting, governing, and stopping DeepSeek Harness agent fleets. |
+| 日本語 | DeepSeek Harness Agent艦隊をルーティング、監視、予算管理、制御するクロスプラットフォーム基盤。 |
+| 한국어 | DeepSeek Harness 에이전트 함대를 라우팅, 관찰, 예산 관리, 정책 적용, 중지하는 크로스 플랫폼 제어 플레인. |
+| Español | Un plano de control multiplataforma para enrutar, observar, presupuestar, gobernar y detener flotas de agentes DeepSeek Harness. |
+
 ## The 30-second version
 
 SeekFleet turns DeepSeek Harness from a collection of processes into an observable, governable fleet:

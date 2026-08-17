@@ -4,10 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#07111f" />
-    <meta
-      name="description"
-      content="SeekFleet — cross-platform control plane for DeepSeek Harness agent fleets."
-    />
+    <meta name="description" content="SeekFleet — cross-platform control plane for DeepSeek Harness agent fleets." />
     <meta property="og:title" content="SeekFleet — Run agents like a fleet" />
     <meta
       property="og:description"
@@ -18,11 +15,15 @@
     <meta property="og:image" content="https://cndoin.github.io/seekfleet/og.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="SeekFleet — Run agents like a fleet" />
-    <meta name="twitter:description" content="Route, monitor, budget, and stop DeepSeek Harness agents from any MCP-capable AI client." />
+    <meta
+      name="twitter:description"
+      content="Route, monitor, budget, and stop DeepSeek Harness agents from any MCP-capable AI client."
+    />
     <meta name="twitter:image" content="https://cndoin.github.io/seekfleet/og.png" />
     <link rel="canonical" href="https://cndoin.github.io/seekfleet/" />
     <title>SeekFleet — Agent fleet control plane</title>
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./locales.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -37,9 +38,19 @@
         <span>SeekFleet</span>
       </a>
       <nav aria-label="Primary navigation">
-        <a href="#features">能力</a>
-        <a href="#install">安装</a>
-        <a href="#architecture">架构</a>
+        <a href="#features" data-i18n="nav.features">能力</a>
+        <a href="#install" data-i18n="nav.install">安装</a>
+        <a href="#architecture" data-i18n="nav.architecture">架构</a>
+        <label class="language-picker"
+          ><span aria-hidden="true">◎</span
+          ><select id="language-select" aria-label="Language">
+            <option value="zh-CN">简体中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+            <option value="es">Español</option>
+          </select></label
+        >
         <a class="nav-cta" data-repo-link href="https://github.com/cndoin/seekfleet">GitHub</a>
       </nav>
     </header>
@@ -47,19 +58,28 @@
     <main id="top">
       <section class="hero wrap" data-reveal>
         <div class="hero-copy">
-          <div class="badge"><span></span> Windows · Linux · macOS</div>
-          <h1>Run agents<br />like a <em>fleet.</em></h1>
-          <p class="lead">
+          <div class="badge"><span></span> <span data-i18n="hero.badge">Windows · Linux · macOS</span></div>
+          <h1>
+            <span data-i18n="hero.titleA">Run agents</span><br /><span data-i18n="hero.titleB">like a</span>
+            <em data-i18n="hero.titleC">fleet.</em>
+          </h1>
+          <p class="lead" data-i18n="hero.lead">
             给 DeepSeek Harness Agent 一套真正可控的运行层。统一调度、监控、预算、策略、故障隔离与手机端控制台。
           </p>
           <div class="hero-actions">
-            <a class="button primary" href="#install">交给 AI 安装</a>
-            <a class="button secondary" data-repo-link href="https://github.com/cndoin/seekfleet">查看源码 <span>↗</span></a>
+            <a class="button primary" href="#install" data-i18n="hero.install">交给 AI 安装</a>
+            <a
+              class="button secondary"
+              data-repo-link
+              href="https://github.com/cndoin/seekfleet"
+              data-i18n="hero.source"
+              >查看源码 <span>↗</span></a
+            >
           </div>
           <div class="proof-row" aria-label="Project highlights">
-            <span><b>20</b> MCP tools</span>
-            <span><b>5</b> routing modes</span>
-            <span><b>3</b> operating systems</span>
+            <span data-i18n="proof.tools"><b>20</b> MCP tools</span>
+            <span data-i18n="proof.routing"><b>5</b> routing modes</span>
+            <span data-i18n="proof.platforms"><b>3</b> operating systems</span>
           </div>
         </div>
 
@@ -71,134 +91,227 @@
           </div>
           <div class="signal-orbit" aria-hidden="true"></div>
           <div class="fleet-summary">
-            <div><small>FLEET HEALTH</small><strong data-counter="98">98<span>%</span></strong></div>
-            <div class="health-ring"><span>12</span><small>agents</small></div>
+            <div>
+              <small data-i18n="control.health">FLEET HEALTH</small><strong data-counter="98">98<span>%</span></strong>
+            </div>
+            <div class="health-ring"><span>12</span><small data-i18n="control.agents">agents</small></div>
           </div>
           <div class="metric-grid">
-            <div><small>RUNNING</small><b data-counter="4">04</b><span class="cyan">+2 now</span></div>
-            <div><small>TOKENS</small><b data-counter="284">284k</b><span>today</span></div>
-            <div><small>COST</small><b>$1.84</b><span>of $5.00</span></div>
+            <div>
+              <small data-i18n="control.running">RUNNING</small><b data-counter="4">04</b
+              ><span class="cyan" data-i18n="control.now">+2 now</span>
+            </div>
+            <div>
+              <small data-i18n="control.tokens">TOKENS</small><b data-counter="284">284k</b
+              ><span data-i18n="control.today">today</span>
+            </div>
+            <div>
+              <small data-i18n="control.cost">COST</small><b>$1.84</b><span data-i18n="control.budget">of $5.00</span>
+            </div>
           </div>
           <div class="agent-list">
-            <div class="agent-row"><i class="agent-state busy"></i><span><b>code-a</b><small>refactor auth flow</small></span><em>1 / 2</em></div>
-            <div class="agent-row"><i class="agent-state ready"></i><span><b>review</b><small>waiting for task</small></span><em>0 / 1</em></div>
-            <div class="agent-row"><i class="agent-state busy"></i><span><b>research</b><small>collecting sources</small></span><em>1 / 1</em></div>
+            <div class="agent-row">
+              <i class="agent-state busy"></i
+              ><span><b>code-a</b><small data-i18n="control.taskAuth">refactor auth flow</small></span
+              ><em>1 / 2</em>
+            </div>
+            <div class="agent-row">
+              <i class="agent-state ready"></i
+              ><span><b>review</b><small data-i18n="control.taskReview">waiting for task</small></span
+              ><em>0 / 1</em>
+            </div>
+            <div class="agent-row">
+              <i class="agent-state busy"></i
+              ><span><b>research</b><small data-i18n="control.taskResearch">collecting sources</small></span
+              ><em>1 / 1</em>
+            </div>
           </div>
-          <div class="telemetry-line"><span>LATENCY</span><div class="telemetry-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><em data-live-latency>42 ms</em></div>
-          <div class="event-line"><span>14:32:08</span><b>adaptive route</b><em>→ code-a</em></div>
+          <div class="telemetry-line">
+            <span data-i18n="control.latency">LATENCY</span>
+            <div class="telemetry-bars" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <em data-live-latency>42 ms</em>
+          </div>
+          <div class="event-line">
+            <span>14:32:08</span><b data-i18n="control.route">adaptive route</b><em>→ code-a</em>
+          </div>
         </div>
       </section>
 
       <section class="trusted wrap" aria-label="Compatible clients" data-reveal>
-        <span>Works with</span>
+        <span data-i18n="trusted.label">Works with</span>
         <div><b>Codex</b><b>Claude</b><b>Cursor</b><b>Gemini</b><b>Hermes</b><b>OpenClaw</b></div>
       </section>
 
       <section class="section wrap" id="features" data-reveal>
         <div class="section-heading">
-          <span class="kicker">CONTROL, NOT CHAOS</span>
-          <h2>不是多开几个进程。<br />是完整的 Agent 控制平面。</h2>
-          <p>从一次任务到长期运行的 Agent 集群，每一层都可观察、可限制、可停止。</p>
+          <span class="kicker" data-i18n="features.kicker">CONTROL, NOT CHAOS</span>
+          <h2 data-i18n="features.title">不是多开几个进程。<br />是完整的 Agent 控制平面。</h2>
+          <p data-i18n="features.lead">从一次任务到长期运行的 Agent 集群，每一层都可观察、可限制、可停止。</p>
         </div>
         <div class="feature-grid">
           <article class="feature feature-wide">
             <div class="feature-icon route-icon"><i></i><i></i><i></i></div>
-            <div><span>01 / ROUTING</span><h3>Adaptive routing</h3><p>根据成功率、延迟、负载、标签、成本和近期故障，为每个任务选择更合适的 Agent。</p></div>
+            <div>
+              <span data-i18n="features.routing.label">01 / ROUTING</span>
+              <h3 data-i18n="features.routing.title">Adaptive routing</h3>
+              <p data-i18n="features.routing.body">
+                根据成功率、延迟、负载、标签、成本和近期故障，为每个任务选择更合适的 Agent。
+              </p>
+            </div>
             <div class="route-map"><i class="source"></i><i></i><i></i><i class="selected"></i></div>
           </article>
           <article class="feature">
             <div class="feature-icon shield-icon">◇</div>
-            <span>02 / SAFETY</span><h3>Policy first</h3><p>限制路径、工具、网络、环境变量、运行时间与预算。策略失败不会被静默绕过。</p>
+            <span data-i18n="features.safety.label">02 / SAFETY</span>
+            <h3 data-i18n="features.safety.title">Policy first</h3>
+            <p data-i18n="features.safety.body">
+              限制路径、工具、网络、环境变量、运行时间与预算。策略失败不会被静默绕过。
+            </p>
           </article>
           <article class="feature">
             <div class="feature-icon pulse-icon"><i></i></div>
-            <span>03 / RESILIENCE</span><h3>Built to recover</h3><p>持久会话、断路器、排空缩容、原子状态与完整进程树终止。</p>
+            <span data-i18n="features.resilience.label">03 / RESILIENCE</span>
+            <h3 data-i18n="features.resilience.title">Built to recover</h3>
+            <p data-i18n="features.resilience.body">持久会话、断路器、排空缩容、原子状态与完整进程树终止。</p>
           </article>
           <article class="feature">
             <div class="feature-icon graph-icon"><i></i><i></i><i></i></div>
-            <span>04 / WORKFLOWS</span><h3>DAG execution</h3><p>让独立节点并行，让依赖节点按序执行，并将上游结果安全传递给综合任务。</p>
+            <span data-i18n="features.workflow.label">04 / WORKFLOWS</span>
+            <h3 data-i18n="features.workflow.title">DAG execution</h3>
+            <p data-i18n="features.workflow.body">
+              让独立节点并行，让依赖节点按序执行，并将上游结果安全传递给综合任务。
+            </p>
           </article>
           <article class="feature feature-accent">
             <div class="feature-icon phone-icon"><i></i></div>
-            <span>05 / ANYWHERE</span><h3>Your fleet, in your pocket</h3><p>局域网手机面板实时显示 Agent、任务、Token、成本、故障与缓存，并支持受保护的取消和关闭操作。</p>
+            <span data-i18n="features.anywhere.label">05 / ANYWHERE</span>
+            <h3 data-i18n="features.anywhere.title">Your fleet, in your pocket</h3>
+            <p data-i18n="features.anywhere.body">
+              局域网手机面板实时显示 Agent、任务、Token、成本、故障与缓存，并支持受保护的取消和关闭操作。
+            </p>
           </article>
         </div>
       </section>
 
       <section class="visual-proof wrap" data-reveal>
         <div class="visual-copy">
-          <span class="kicker">THE CONTROL ROOM</span>
-          <h2>从一个 Prompt，<br />到一支 Fleet。</h2>
-          <p>每个 Agent 都有状态，每次调用都有成本，每个动作都能被限制、追踪和停止。漂亮的界面只是入口，真正的价值是控制感。</p>
-          <div class="visual-stats"><span><b>∞</b><small>可持续会话</small></span><span><b>0</b><small>隐藏控制</small></span><span><b>1</b><small>统一入口</small></span></div>
+          <span class="kicker" data-i18n="visual.kicker">THE CONTROL ROOM</span>
+          <h2 data-i18n="visual.title">从一个 Prompt，<br />到一支 Fleet。</h2>
+          <p data-i18n="visual.body">
+            每个 Agent
+            都有状态，每次调用都有成本，每个动作都能被限制、追踪和停止。漂亮的界面只是入口，真正的价值是控制感。
+          </p>
+          <div class="visual-stats">
+            <span><b>∞</b><small data-i18n="visual.statSessions">可持续会话</small></span
+            ><span><b>0</b><small data-i18n="visual.statHidden">隐藏控制</small></span
+            ><span><b>1</b><small data-i18n="visual.statEntry">统一入口</small></span>
+          </div>
         </div>
         <figure class="cover-frame">
           <div class="cover-beam" aria-hidden="true"></div>
           <img src="./og.png" alt="SeekFleet control plane coordinating an agent fleet" loading="lazy" />
-          <figcaption><span class="status-dot"></span> shareable, readable, ready to ship</figcaption>
+          <figcaption>
+            <span class="status-dot"></span> <span data-i18n="visual.caption">shareable, readable, ready to ship</span>
+          </figcaption>
         </figure>
       </section>
 
       <section class="install-section" id="install" data-reveal>
         <div class="wrap install-layout">
           <div class="install-copy">
-            <span class="kicker">ONE PROMPT INSTALL</span>
-            <h2>把网址给 AI。<br />剩下的交给它。</h2>
-            <p>SeekFleet 提供机器可读的安装契约。AI 会检查系统、构建项目、安装 Skill、配置 MCP，并完成验证。</p>
+            <span class="kicker" data-i18n="install.kicker">ONE PROMPT INSTALL</span>
+            <h2 data-i18n="install.title">把网址给 AI。<br />剩下的交给它。</h2>
+            <p data-i18n="install.body">
+              SeekFleet 提供机器可读的安装契约。AI 会检查系统、构建项目、安装 Skill、配置 MCP，并完成验证。
+            </p>
             <ul>
-              <li><i>✓</i> 自动识别 Windows、Linux、macOS</li>
-              <li><i>✓</i> 支持用户级与项目级 Skill</li>
-              <li><i>✓</i> 安装、验证、更新、回滚全部有据可循</li>
+              <li data-i18n="install.point1"><i>✓</i> 自动识别 Windows、Linux、macOS</li>
+              <li data-i18n="install.point2"><i>✓</i> 支持用户级与项目级 Skill</li>
+              <li data-i18n="install.point3"><i>✓</i> 安装、验证、更新、回滚全部有据可循</li>
             </ul>
           </div>
           <div class="prompt-card">
-            <div class="prompt-head"><span>给你的 AI 发送</span><button class="copy-button" data-copy="ai-prompt">复制</button></div>
+            <div class="prompt-head">
+              <span data-i18n="install.promptLabel">给你的 AI 发送</span
+              ><button class="copy-button" data-copy="ai-prompt" data-i18n="install.copy">复制</button>
+            </div>
             <pre id="ai-prompt"><code>Install SeekFleet from https://github.com/cndoin/seekfleet.
 Read INSTALL.md first, install it for this AI client,
 configure its MCP server, and verify the installation
 without exposing credentials.</code></pre>
-            <div class="prompt-foot"><span class="status-dot"></span><span>AI-installable repository</span></div>
+            <div class="prompt-foot">
+              <span class="status-dot"></span><span data-i18n="install.promptFoot">AI-installable repository</span>
+            </div>
           </div>
         </div>
       </section>
 
       <section class="section wrap" id="architecture" data-reveal>
         <div class="section-heading compact">
-          <span class="kicker">ONE CONTROL PLANE</span>
-          <h2>接入任意 AI，控制同一套 Fleet。</h2>
+          <span class="kicker" data-i18n="architecture.kicker">ONE CONTROL PLANE</span>
+          <h2 data-i18n="architecture.title">接入任意 AI，控制同一套 Fleet。</h2>
         </div>
         <div class="architecture">
-          <div class="arch-clients">
-            <span>Codex</span><span>Claude</span><span>Cursor</span><span>Gemini</span>
-          </div>
-          <div class="arch-connector"><i></i><b>MCP / SDK</b><i></i></div>
+          <div class="arch-clients"><span>Codex</span><span>Claude</span><span>Cursor</span><span>Gemini</span></div>
+          <div class="arch-connector"><i></i><b data-i18n="architecture.mcp">MCP / SDK</b><i></i></div>
           <div class="arch-core">
-            <div class="core-mark"><span class="brand-mark"><i></i><i></i><i></i></span></div>
-            <div><small>CONTROL PLANE</small><strong>SeekFleet</strong></div>
-            <div class="core-features"><span>Sessions</span><span>Routing</span><span>Policies</span><span>Metrics</span></div>
+            <div class="core-mark">
+              <span class="brand-mark"><i></i><i></i><i></i></span>
+            </div>
+            <div><small data-i18n="architecture.control">CONTROL PLANE</small><strong>SeekFleet</strong></div>
+            <div class="core-features">
+              <span data-i18n="architecture.sessions">Sessions</span
+              ><span data-i18n="architecture.routing">Routing</span
+              ><span data-i18n="architecture.policies">Policies</span
+              ><span data-i18n="architecture.metrics">Metrics</span>
+            </div>
           </div>
-          <div class="arch-connector down"><i></i><b>PROCESS CONTROL</b><i></i></div>
-          <div class="arch-runtime"><span>DeepSeek Harness</span><small>profiles · tools · models · subprocesses</small></div>
+          <div class="arch-connector down"><i></i><b data-i18n="architecture.process">PROCESS CONTROL</b><i></i></div>
+          <div class="arch-runtime">
+            <span>DeepSeek Harness</span
+            ><small data-i18n="architecture.runtime">profiles · tools · models · subprocesses</small>
+          </div>
         </div>
       </section>
 
       <section class="tool-section wrap" data-reveal>
-        <div class="tool-copy"><span class="kicker">20 STRUCTURED TOOLS</span><h2>AI 不需要猜<br />下一步该做什么。</h2><p>每个 MCP 工具都带输入 Schema、行为注解和稳定响应结构。</p></div>
+        <div class="tool-copy">
+          <span class="kicker" data-i18n="tools.kicker">20 STRUCTURED TOOLS</span>
+          <h2 data-i18n="tools.title">AI 不需要猜<br />下一步该做什么。</h2>
+          <p data-i18n="tools.body">每个 MCP 工具都带输入 Schema、行为注解和稳定响应结构。</p>
+        </div>
         <div class="tool-cloud" aria-label="MCP tool examples">
-          <span>dsh_inspect</span><span>dsh_run</span><span>dsh_session_start</span><span>dsh_cluster_route</span><span>dsh_metrics</span><span>dsh_dag_run</span><span>dsh_session_cancel</span><span>dsh_capability_match</span>
+          <span>dsh_inspect</span><span>dsh_run</span><span>dsh_session_start</span><span>dsh_cluster_route</span
+          ><span>dsh_metrics</span><span>dsh_dag_run</span><span>dsh_session_cancel</span
+          ><span>dsh_capability_match</span>
         </div>
       </section>
 
       <section class="final-cta wrap" data-reveal>
-        <div><span class="kicker">READY TO COMMAND</span><h2>Turn agents into a fleet.</h2><p>开源、跨平台、可控。现在把 SeekFleet 交给你的 AI。</p></div>
-        <div class="hero-actions"><a class="button primary" href="#install">复制安装指令</a><a class="button secondary" data-pages-link href="https://cndoin.github.io/seekfleet/">Live page <span>↗</span></a><a class="button secondary" data-repo-link href="https://github.com/cndoin/seekfleet">GitHub <span>↗</span></a></div>
+        <div>
+          <span class="kicker" data-i18n="final.kicker">READY TO COMMAND</span>
+          <h2 data-i18n="final.title">Turn agents into a fleet.</h2>
+          <p data-i18n="final.body">开源、跨平台、可控。现在把 SeekFleet 交给你的 AI。</p>
+        </div>
+        <div class="hero-actions">
+          <a class="button primary" href="#install" data-i18n="final.install">复制安装指令</a
+          ><a class="button secondary" data-pages-link href="https://cndoin.github.io/seekfleet/" data-i18n="final.live"
+            >Live page <span>↗</span></a
+          ><a class="button secondary" data-repo-link href="https://github.com/cndoin/seekfleet"
+            >GitHub <span>↗</span></a
+          >
+        </div>
       </section>
     </main>
 
     <footer class="wrap">
-      <a class="brand" href="#top"><span class="brand-mark"><i></i><i></i><i></i></span><span>SeekFleet</span></a>
-      <p>Cross-platform control plane for DeepSeek Harness agent fleets.</p>
-      <span>MIT License</span>
+      <a class="brand" href="#top"
+        ><span class="brand-mark"><i></i><i></i><i></i></span><span>SeekFleet</span></a
+      >
+      <p data-i18n="footer.tagline">Cross-platform control plane for DeepSeek Harness agent fleets.</p>
+      <span data-i18n="footer.license">MIT License</span>
     </footer>
 
     <div class="toast" role="status" aria-live="polite">已复制</div>

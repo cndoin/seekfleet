@@ -3,6 +3,43 @@ document.documentElement.classList.add("js");
 const repository = document.documentElement.dataset.repository || "https://github.com/cndoin/seekfleet";
 const productPage = "https://cndoin.github.io/seekfleet/";
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const locales = window.seekfleetLocales || {};
+const languageSelect = document.querySelector("#language-select");
+
+const detectLanguage = () => {
+  try {
+    const saved = localStorage.getItem("seekfleet-language");
+    if (saved && locales[saved]) return saved;
+  } catch {
+    // Private browsing can deny localStorage; browser language detection still works.
+  }
+  const browserLanguage = (navigator.language || "en").toLowerCase();
+  if (browserLanguage.startsWith("zh")) return "zh-CN";
+  if (browserLanguage.startsWith("ja")) return "ja";
+  if (browserLanguage.startsWith("ko")) return "ko";
+  if (browserLanguage.startsWith("es")) return "es";
+  return "en";
+};
+
+let currentLocale = detectLanguage();
+const applyLocale = (locale) => {
+  currentLocale = locales[locale] ? locale : "en";
+  const dictionary = locales[currentLocale] || {};
+  document.documentElement.lang = currentLocale;
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    const value = dictionary[element.dataset.i18n];
+    if (value !== undefined) element.innerHTML = value;
+  });
+  if (languageSelect) languageSelect.value = currentLocale;
+  try {
+    localStorage.setItem("seekfleet-language", currentLocale);
+  } catch {
+    // The page remains fully usable without persistence.
+  }
+};
+
+applyLocale(currentLocale);
+languageSelect?.addEventListener("change", (event) => applyLocale(event.target.value));
 
 document.querySelectorAll("[data-repo-link]").forEach((link) => {
   link.href = repository;
@@ -120,11 +157,17 @@ document.querySelectorAll("[data-copy]").forEach((button) => {
         toast.classList.add("show");
         setTimeout(() => toast.classList.remove("show"), 1800);
       }
-      button.textContent = "已复制 ✓";
-      setTimeout(() => (button.textContent = "复制"), 1800);
+      button.innerHTML = locales[currentLocale]?.["copy.success"] || "Copied ✓";
+      setTimeout(() => {
+        const label = locales[currentLocale]?.[button.dataset.i18n] || "Copy";
+        button.innerHTML = label;
+      }, 1800);
     } catch {
-      button.textContent = "请手动复制";
-      setTimeout(() => (button.textContent = "复制"), 1800);
+      button.innerHTML = locales[currentLocale]?.["copy.fail"] || "Copy manually";
+      setTimeout(() => {
+        const label = locales[currentLocale]?.[button.dataset.i18n] || "Copy";
+        button.innerHTML = label;
+      }, 1800);
     }
   });
 });
