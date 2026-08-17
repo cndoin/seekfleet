@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Future changes will be listed here.
+
+## [0.1.0] - 2026-08-17
+
 ### Added
 - SeekFleet brand, CLI, Agent Skill metadata, AI-first installation contract, and cross-client Skill installer
 - Windows, Linux, and macOS CI matrix across Node.js 20, 22, and 24
