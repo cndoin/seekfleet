@@ -4,7 +4,7 @@
 // (AbortController + PID). On startup it scans for "running" sessions and
 // marks them as "paused" so the MCP server can rehydrate them safely.
 
-import { resolveDsh } from "./install.js";
+import { ensureDshHome, resolveDsh } from "./install.js";
 import { SessionStore, type SessionRecord, type SessionStatus, type SessionCheckpoint } from "./session.js";
 import { PolicyEnforcer, type ExecutionContext } from "./policy-enforcer.js";
 import { CostTracker } from "./cost-tracker.js";
@@ -47,15 +47,21 @@ export class SessionManager {
   ) => Promise<DshResult>;
 
   constructor(opts: SessionManagerOptions = {}) {
-    const resolved = resolveDsh({ dshHome: opts.dshHome });
-    const { dshHome } = resolved;
+    // Test and embedding callers can provide a runner without installing the
+    // optional DeepSeek Harness package. Resolve the real runtime lazily only
+    // when the default runner is actually started.
+    const dshHome = ensureDshHome(opts.dshHome);
     this.store = new SessionStore(dshHome);
     this.policy = opts.policy;
     if (opts.runner) {
       this.runner = opts.runner;
     } else {
-      const client = new DshClient({ dshModuleRoot: resolved.moduleRoot, dshHome, policy: this.policy });
+      let client: DshClient | undefined;
       this.runner = async (task, ctx) => {
+        if (!client) {
+          const resolved = resolveDsh({ dshHome });
+          client = new DshClient({ dshModuleRoot: resolved.moduleRoot, dshHome, policy: this.policy });
+        }
         const events: DshEvent[] = [];
         let eventCount = 0;
         for await (const event of client.stream({ ...task, signal: ctx.signal })) {

@@ -1,6 +1,6 @@
 {
   "name": "seekfleet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cross-platform control plane for DeepSeek Harness agent fleets, with MCP, durable sessions, budgets, policies, and a LAN dashboard.",
   "type": "module",
   "main": "./dist/src/index.js",

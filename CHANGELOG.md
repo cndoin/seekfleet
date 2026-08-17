@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Future changes will be listed here.
 
+## [0.1.1] - 2026-08-17
+
+### Fixed
+- Lazily resolve the optional DeepSeek Harness runtime so embedded runners and CI can construct session managers without a local Harness installation
+- Increase the cross-platform Vitest timeout for slower filesystems and hosted runners
+- Make GitHub Release creation independent of optional npm publishing credentials
+
 ## [0.1.0] - 2026-08-17
 
 ### Added
