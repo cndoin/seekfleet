@@ -28,7 +28,7 @@ Cross-platform control plane for DeepSeek Harness agent fleets — with MCP, dur
 
 ## International overview
 
-The product page includes a persistent language switcher with five localized experiences: [简体中文](https://cndoin.github.io/seekfleet/), [English](https://cndoin.github.io/seekfleet/), [日本語](https://cndoin.github.io/seekfleet/), [한국어](https://cndoin.github.io/seekfleet/), and [Español](https://cndoin.github.io/seekfleet/). The page detects the browser language automatically and remembers the visitor's choice.
+The product page includes a persistent language switcher with five localized experiences: [简体中文](https://cndoin.github.io/seekfleet/?lang=zh-CN), [English](https://cndoin.github.io/seekfleet/?lang=en), [日本語](https://cndoin.github.io/seekfleet/?lang=ja), [한국어](https://cndoin.github.io/seekfleet/?lang=ko), and [Español](https://cndoin.github.io/seekfleet/?lang=es). The page detects the browser language automatically, accepts a direct `?lang=` link, and remembers the visitor's choice.
 
 | Language | Product summary |
 | --- | --- |

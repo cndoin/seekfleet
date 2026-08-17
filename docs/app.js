@@ -7,6 +7,8 @@ const locales = window.seekfleetLocales || {};
 const languageSelect = document.querySelector("#language-select");
 
 const detectLanguage = () => {
+  const requested = new URLSearchParams(window.location.search).get("lang");
+  if (requested && locales[requested]) return requested;
   try {
     const saved = localStorage.getItem("seekfleet-language");
     if (saved && locales[saved]) return saved;
@@ -31,6 +33,9 @@ const applyLocale = (locale) => {
     if (value !== undefined) element.innerHTML = value;
   });
   if (languageSelect) languageSelect.value = currentLocale;
+  const url = new URL(window.location.href);
+  url.searchParams.set("lang", currentLocale);
+  window.history.replaceState(null, "", url);
   try {
     localStorage.setItem("seekfleet-language", currentLocale);
   } catch {
