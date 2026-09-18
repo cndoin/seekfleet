@@ -184,6 +184,22 @@
         "idempotentHint": true,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "dsh_trace_classify",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_cluster_attribution",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
     }
   ]
 }

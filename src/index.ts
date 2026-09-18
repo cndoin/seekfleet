@@ -53,6 +53,45 @@ export {
   type DagResult,
   type NodeRunner,
 } from "./task-dag.js";
+// —— 组织层（多 agent 质量的三个环节：契约 / 验证 / 归因）——
+export {
+  DEPARTMENTS,
+  getDepartment,
+  compileRoleContract,
+  attachRoleContract,
+  hasRoleContract,
+  validateRoleSpec,
+  auditRoleRun,
+  type RoleSpec,
+  type RoleAudit,
+  type RoleViolation,
+} from "./role-spec.js";
+export {
+  verifyResult,
+  defaultVerifyRules,
+  type VerifyRule,
+  type VerifyRuleKind,
+  type VerifyCheck,
+  type VerifyReport,
+  type VerifyContext,
+} from "./verifier.js";
+export { checkSchema, extractJson, type JsonSchema, type JsonValue, type SchemaCheckResult } from "./json-schema.js";
+export {
+  MAST_MODES,
+  MAST_BASELINE,
+  getMode,
+  classifyTrace,
+  aggregateFailures,
+  formatAttribution,
+  type MastCategory,
+  type MastCode,
+  type MastMode,
+  type MastReport,
+  type MastReportRow,
+  type TraceView,
+  type FailureSignal,
+  type FailureAttribution,
+} from "./mast.js";
 export { ReplayRecorder, type ReplayFile, type ReplayHeader } from "./replay-recorder.js";
 export {
   codexInstall,
@@ -95,6 +134,7 @@ export type {
   DshUsage,
   DshResult,
   DshTask,
+  DshTaskAudit,
   DshInstanceSpec,
   DshInstanceStatus,
   DshInstanceState,
@@ -104,4 +144,5 @@ export type {
   DshCapability,
   DshInspection,
   DshEnvelope,
+  DagNodeSpec,
 } from "./types.js";

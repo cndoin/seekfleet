@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Role contracts (`src/role-spec.ts`).** A task can now carry `role: "<dept>"`
+  or a full `RoleSpec`. The contract is compiled into an XML block that always
+  includes a termination condition, is injected into the prompt before dispatch,
+  and is audited afterwards against the tool-call record. Built-in departments:
+  `planner` / `worker` / `reviewer` / `synthesizer` (an orchestrator-worker shape
+  where `reviewer` is denied write tools so verification stays independent). A
+  violation is reported as `error.code: "ROLE_CONTRACT_VIOLATION"`, not as a
+  warning. An unknown department name is an error — there is no silent fallback
+  to a generic worker.
+- **Independent verification layer (`src/verifier.ts`).** `task.verify` accepts
+  rules (`command` / `answer-schema` / `answer-match` / `file-exists` /
+  `max-tool-calls` / `tool-not-used`) that the framework runs *after* the agent
+  finishes. Commands always execute as an argv array with `shell: false`, and an
+  unrecognised rule kind fails the run instead of being skipped, so a report that
+  says "verified" means it. Verification failures become
+  `error.code: "VERIFY_FAILED"`. Targets MAST's ~23% verification failures.
+- **Failure attribution (`src/mast.ts`).** Every run is classified against the
+  14 MAST failure modes (Cemri et al., arXiv:2503.13657; inter-annotator κ=0.88).
+  Each signal carries `confidence` and reproducible `evidence`; hard evidence
+  scores 0.75–0.85, indirect inference is deliberately kept at 0.4–0.55 so it can
+  rank the investigation order but never convict anyone. An empty trace reports
+  "no signal detected", not "success". Surface: `DshResult.audit.attribution`,
+  `cluster.attributionReport()`, `cluster.status().attribution`,
+  `DagResult.attribution`, and the `dsh_trace_classify` /
+  `dsh_cluster_attribution` MCP tools. Batch output is comparable against the
+  paper's baseline (system-design 44.2% / inter-agent 32.3% / verification 23.5%).
+- **Effort scaling.** `DshClusterSpec.maxParallelSubtasks` (default 8),
+  `effortPolicy` per level (low 1 / medium 3 / high 8) and
+  `cluster.recommendFanout(effort)` keep a simple question from fanning out into
+  dozens of agents; `DagSpec.maxNodes` rejects an over-decomposed graph outright,
+  and DAG concurrency is clamped to the cluster's ceiling.
+- **Thinking-token budget.** `task.thinkingTokenBudget` records actual usage and
+  sets `result.audit.budget.exceeded` when it is blown, without blocking the run —
+  sometimes the extra spend is worth it, but you must be able to see it.
+- Two new MCP tools (`dsh_trace_classify`, `dsh_cluster_attribution`); tool count
+  is 22. `dsh_run`, `dsh_cluster_route` and `dsh_dag_run` accept `role` / `verify`
+  / `thinkingTokenBudget` / `effort`.
+- Note: a run whose contract or verification failed is **not written to the
+  result cache**, so a bad answer cannot be replayed for every later caller.
+
 ### Fixed
 - **A crashed task no longer reports success.** `dsh` exits non-zero for hard
   failures (missing credentials, invalid flags, a crashed tool) and prints

@@ -141,6 +141,60 @@ await fleet.clusterShutdown(clusterId);
 
 Routing strategies include `least-loaded`, `round-robin`, `tag`, `adaptive`, and `random`.
 
+## Making many agents behave like one organization
+
+Splitting work across agents is lossy: every hand-off can only lose information,
+never add it (data-processing inequality). Under an equal thinking-token budget a
+single agent is often **not worse** than a fleet (Tran & Kiela, arXiv:2604.02460).
+Fan out for throughput, isolation or breadth — not because "more agents" sounds
+stronger.
+
+When you do fan out, most failures come from organization design, not model
+quality. In *Why Do Multi-Agent LLM Systems Fail?* (arXiv:2503.13657) the
+annotated failures split into **system design 44.2%**, **inter-agent mismatch
+32.3%**, and **task verification ~23%**. SeekFleet ships three mechanisms aimed
+at exactly those buckets:
+
+| Mechanism | What you pass | What it prevents |
+| --- | --- | --- |
+| **Role contract** | `role: "planner" \| "worker" \| "reviewer" \| "synthesizer"` or a full `RoleSpec` | Forgotten termination conditions, out-of-scope tools, runaway retry loops, unstructured hand-offs |
+| **Independent verification** | `verify: [{ kind: "command", argv: [...] }, ...]` | "Done" declarations that nobody checked; every check runs as argv with `shell: false` |
+| **Failure attribution** | nothing — always on | Flying blind: failures repeat because nobody knows which mode they hit |
+
+A contract violation becomes a **failure** (`error.code:
+"ROLE_CONTRACT_VIOLATION"` / `"VERIFY_FAILED"`), not a warning, and a run that
+failed its contract is never written to the result cache.
+
+```js
+import { SeekFleet } from "seekfleet";
+
+const fleet = new SeekFleet({});
+const id = fleet.cluster({ instances: [{ label: "w1" }, { label: "w2" }], maxParallelSubtasks: 3 });
+
+const plan = await fleet.clusterRoute(id, {
+  task: "拆一个可并行的最小任务列表",
+  role: "planner",            // 契约注入 prompt 并事后审计
+  effort: "low",              // effort 档位决定并行度，不让简单问题炸开
+});
+console.log(plan.audit?.role?.parsedOutput);  // { subtasks: [{ id, goal, acceptance }] }
+
+const done = await fleet.clusterRoute(id, {
+  task: "实现 subtask-1",
+  role: "worker",
+  verify: [{ kind: "command", argv: ["npm", "test"], timeoutMs: 300000 }],
+});
+console.log(done.error?.code);   // VERIFY_FAILED if the tests fail
+
+// 失败时不要只盯着 message —— 先问这次命中了哪一种失败模式
+console.log(done.audit?.attribution?.primary?.code);   // e.g. FM-3.2
+console.log(fleet.clusterStatus(id).attribution);      // 批量分布 + 对照 MAST 基准
+```
+
+MCP callers get the same values through `dsh_trace_classify`
+(single trace → ranked signals with evidence) and `dsh_cluster_attribution`
+(roll-up per cluster). See `examples/orchestration-departments.mjs` for the
+full planner → workers → reviewer loop.
+
 ## Architecture
 
 ```text

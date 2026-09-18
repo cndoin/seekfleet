@@ -24,6 +24,7 @@
     "INSTALL.md",
     "docs",
     "examples/cluster-demo.mjs",
+    "examples/orchestration-departments.mjs",
     "examples/ultimate-demo.mjs",
     "examples/mcp-full.mjs",
     "examples/mcp-list.mjs",

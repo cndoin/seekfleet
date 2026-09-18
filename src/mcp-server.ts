@@ -7,8 +7,14 @@
 //   - structuredContent envelope ({ok, data, error}) so AI callers can branch reliably
 //   - pagination + character-limit handling where applicable
 //
-// Tools (20): runtime/profile, cluster/DAG/metrics, capability matching,
-//             and seven durable session lifecycle operations.
+// Tools (22): runtime/profile, cluster/DAG/metrics, capability matching,
+//             seven durable session lifecycle operations, and two failure
+//             attribution tools (MAST).
+//
+// 为什么要有归因工具：多 agent 系统 40%-90% 的失败率里，绝大部分集中在
+// 固定的十几条模式上（arXiv:2503.13657）。一个 harness 如果在失败时只知道
+// 「失败了」，它下一次会以完全相同的方式再失败一次。把「这次是哪种失败」
+// 回给调用方，才有可能让它改结构而不是改 prompt。
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -23,7 +29,11 @@ import { resolveDsh } from "./install.js";
 import { SessionManager } from "./session-manager.js";
 import { packageVersion } from "./version.js";
 import { startDashboardServer, type DashboardServerHandle, type DashboardSnapshot } from "./dashboard-server.js";
+import { DEPARTMENTS } from "./role-spec.js";
+import { aggregateFailures, classifyTrace, formatAttribution, MAST_BASELINE, type TraceView } from "./mast.js";
 import type { DshClusterSpec, DshEnvelope, DshInstanceSpec, DshResult, DshTask } from "./types.js";
+import type { RoleSpec } from "./role-spec.js";
+import type { VerifyRule } from "./verifier.js";
 
 /** MCP 2025-11-25 recommended CHARACTER_LIMIT for tool output. */
 export const CHARACTER_LIMIT = 25_000;
@@ -55,7 +65,29 @@ export const MCP_TOOL_NAMES = [
   "dsh_session_resume",
   "dsh_session_result",
   "dsh_capability_match",
+  "dsh_trace_classify",
+  "dsh_cluster_attribution",
 ] as const;
+
+/** 内置部门名，用于 zod enum 与工具描述（保持和 DEPARTMENTS 单一数据源）。 */
+const DEPARTMENT_NAMES = Object.keys(DEPARTMENTS) as [string, ...string[]];
+
+/**
+ * 描述性的 role / verify 参数说明。
+ *
+ * Anthropic 的经验：把工具描述当成产品文案来写、并用 agent 反复试用重写，
+ * 任务完成时间能降 40%。SeekFleet 的核心就是把工具暴露给 harness，
+ * 所以这里的描述必须让一个从没见过的模型也能立刻用对。
+ */
+const ROLE_DESCRIPTION =
+  "内置部门名(" +
+  DEPARTMENT_NAMES.join("/") +
+  ")或一份完整 RoleSpec 对象。给角色=给约束：会编译成契约注入 prompt，并在任务结束后审计工具边界/步数/输出 schema。";
+
+const VERIFY_DESCRIPTION =
+  "任务结束后由框架独立执行的校验规则列表。模型自评不可靠，这一层才是验收。kind 取值: " +
+  "command(argv 数组) | answer-schema | answer-match | answer-not-match | answer-min-length | " +
+  "file-exists | max-tool-calls | tool-not-used。未知 kind 会被明确判失败，不会静默跳过。";
 
 interface ClusterEntry {
   cluster: DshCluster;
@@ -208,10 +240,18 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
     {
       capabilities: { tools: {} },
       instructions:
-        "SeekFleet MCP server. Exposes 20 tools for running and controlling DeepSeek Harness " +
+        "SeekFleet MCP server. Exposes " +
+        MCP_TOOL_NAMES.length +
+        " tools for running and controlling DeepSeek Harness " +
         "(dsh) as one-shot tasks and as a multi-instance cluster. Every tool returns " +
         "a {ok, data?, error?} envelope; the structuredContent field mirrors the envelope " +
-        "for AI-validated consumption. Use dsh_inspect first to discover the runtime.",
+        "for AI-validated consumption. Use dsh_inspect first to discover the runtime.\n" +
+        "Multi-agent quality controls: pass `role` (planner/worker/reviewer/synthesizer or a full " +
+        "RoleSpec) and `verify` rules to dsh_run / dsh_cluster_route — the contract is injected " +
+        "into the prompt and audited afterwards; a violation is reported as a failure, not a " +
+        "warning. When a task fails, call dsh_trace_classify to find out which of the 14 MAST " +
+        "failure modes it hit, and dsh_cluster_attribution to see where the cluster loses the " +
+        "most money.",
     },
   );
 
@@ -253,6 +293,13 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
         env: z.record(z.string(), z.string()).optional().describe("Extra env vars"),
         tags: z.array(z.string()).optional().describe("Tags for cluster routing"),
         label: z.string().optional().describe("Human-readable label"),
+        role: z
+          .union([z.string(), z.record(z.unknown())])
+          .optional()
+          .describe(ROLE_DESCRIPTION),
+        verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
+        thinkingTokenBudget: z.number().int().positive().optional().describe("思考 token 预算；超出只记录不禁行"),
+        effort: z.enum(["low", "medium", "high"]).optional().describe("工作量档位，用于上层决定并行度"),
       },
       annotations: {
         readOnlyHint: false,
@@ -459,6 +506,13 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
         profile: z.string().optional(),
         timeoutMs: z.number().int().positive().optional(),
         label: z.string().optional(),
+        role: z
+          .union([z.string(), z.record(z.unknown())])
+          .optional()
+          .describe(ROLE_DESCRIPTION),
+        verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
+        thinkingTokenBudget: z.number().int().positive().optional(),
+        effort: z.enum(["low", "medium", "high"]).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -466,15 +520,13 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
       try {
         const e = clusters.get(args.clusterId);
         if (!e) return toMcpResult(err("CLUSTER_NOT_FOUND", args.clusterId)) as never;
-        const t: DshTask = {
-          task: args.task,
-          profile: args.profile,
-          timeoutMs: args.timeoutMs,
-          tags: args.tags,
-          label: args.label,
-        };
+        const t: DshTask = toTask(args as unknown as Record<string, unknown>);
         const result = await e.cluster.route(t);
-        return toMcpResult(ok({ result })) as never;
+        // route() 会把契约违约/验证失败翻译成 result.error；这里不二次转换，
+        // 直接沿用 dsh_run 的那条判定路径，保证两个工具的失败语义一致。
+        const failure = taskFailure(result);
+        if (failure) return toMcpResult(err(failure.code, failure.message, { result })) as never;
+        return toMcpResult(ok({ result, instance: result.instance })) as never;
       } catch (e2) {
         return toMcpResult(err("CLUSTER_ROUTE_FAILED", e2 instanceof Error ? e2.message : String(e2))) as never;
       }
@@ -612,12 +664,20 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
               timeoutMs: z.number().int().positive().optional(),
               critical: z.boolean().optional(),
               includeDependencyResults: z.boolean().optional(),
+              role: z
+                .union([z.string(), z.record(z.unknown())])
+                .optional()
+                .describe(ROLE_DESCRIPTION),
+              verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
+              effort: z.enum(["low", "medium", "high"]).optional(),
             }),
           )
           .min(1),
         concurrency: z.number().int().positive().optional(),
         abortOnFailure: z.boolean().optional(),
         maxDependencyChars: z.number().int().positive().max(100_000).optional(),
+        maxNodes: z.number().int().positive().optional().describe("节点数上限，防止过度拆分"),
+        maxParallel: z.number().int().positive().optional().describe("并行度上限"),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -626,10 +686,12 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
         const e = clusters.get(args.clusterId);
         if (!e) return toMcpResult(err("CLUSTER_NOT_FOUND", args.clusterId)) as never;
         const result = await e.cluster.runDag({
-          nodes: args.nodes,
+          nodes: args.nodes as unknown as Parameters<DshCluster["runDag"]>[0]["nodes"],
           concurrency: args.concurrency,
           abortOnFailure: args.abortOnFailure,
           maxDependencyChars: args.maxDependencyChars,
+          maxNodes: args.maxNodes,
+          maxParallel: args.maxParallel,
         });
         // A DAG whose nodes all failed would otherwise be reported as ok:true
         // with an empty answer list, hiding the failure from the harness.
@@ -882,6 +944,109 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
     },
   );
 
+  // ---------- dsh_trace_classify (MAST failure attribution) ----------
+  server.registerTool(
+    "dsh_trace_classify",
+    {
+      title: "Classify a failed trace into the MAST failure taxonomy",
+      description:
+        "把一次执行轨迹打到 MAST 的 14 种失败模式里(Cemri et al., arXiv:2503.13657)。" +
+        "输入是客观痕迹(退出码/中断标记/工具调用序列/答案长度/校验报告/角色审计)，" +
+        "输出按置信度排序的信号，每条带 evidence 和对应的**结构级修法**。" +
+        "用途是决定下一次该改哪一处结构——换个模型解决不了前两类失败。" +
+        "给 traces(数组) 时返回聚合分布，可直接和 MAST 基准(system-design 44.2% / " +
+        "inter-agent 32.3% / verification 23.5%)对照。",
+      inputSchema: {
+        trace: z
+          .record(z.unknown())
+          .optional()
+          .describe(
+            "单条轨迹。字段: task / roleName / answer / exitCode / aborted / errorCode / " +
+              "toolCalls([{name,args}]) / toolResults([{name,ok}]) / durationMs / declaredMaxToolCalls / " +
+              "declaredMaxToolCalls / upstream([{id,answer}]) / dependencyResultsInjected / " +
+              "verification({ok,unknownKinds,checks}) / roleAudit({ok,violations})",
+          ),
+        traces: z.array(z.record(z.unknown())).optional().describe("多条轨迹；提供则返回聚合报告"),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        // 至少要有一样东西可分析，否则「没有输入」会被当成「没有失败」返回出去。
+        if (!args.trace && !args.traces) {
+          return toMcpResult(err("MISSING_TRACE", "provide either `trace` or `traces`")) as never;
+        }
+        if (args.traces) {
+          if (args.traces.length === 0) return toMcpResult(err("EMPTY_TRACES", "traces must not be empty")) as never;
+          const attributions = args.traces.map((t) => classifyTrace(toTraceView(t)));
+          const report = aggregateFailures(attributions);
+          return toMcpResult(
+            ok({
+              report,
+              baseline: MAST_BASELINE,
+              note:
+                "对比 baseline 时看的是 shape 而非绝对值：偏向系统设计类说明是规格/边界没写清，" +
+                "换模型没用；偏向验证类说明缺可执行验收。",
+              attributions: attributions.filter((a) => a.signals.length > 0),
+            }),
+          ) as never;
+        }
+        const attribution = classifyTrace(toTraceView(args.trace ?? {}));
+        return toMcpResult(
+          ok({
+            attribution,
+            summary: formatAttribution(attribution),
+            modeCount: 14,
+          }),
+        ) as never;
+      } catch (e) {
+        return toMcpResult(err("CLASSIFY_FAILED", e instanceof Error ? e.message : String(e))) as never;
+      }
+    },
+  );
+
+  // ---------- dsh_cluster_attribution ----------
+  server.registerTool(
+    "dsh_cluster_attribution",
+    {
+      title: "Read the cluster's failure attribution roll-up",
+      description:
+        "返回这个集群最近若干次运行的失败归因汇总：失败率、三类失败分布、命中次数最多的模式及其修法。" +
+        "想知道「这批任务到底在哪一类上最吃亏」就调这个。样本不足时会在 note 里说明。",
+      inputSchema: {
+        clusterId: z.string().min(1),
+        limit: z.number().int().positive().max(50).optional().describe("返回前 N 个最常命中的模式（默认 10）"),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const e = clusters.get(args.clusterId);
+        if (!e) return toMcpResult(err("CLUSTER_NOT_FOUND", args.clusterId)) as never;
+        const report = e.cluster.attributionReport();
+        const limit = args.limit ?? 10;
+        return toMcpResult(
+          ok({
+            totalTraces: report.totalTraces,
+            failedTraces: report.failedTraces,
+            failureRate: report.failureRate,
+            byCategory: report.byCategory,
+            rows: report.rows.slice(0, limit),
+            baseline: MAST_BASELINE,
+            note:
+              report.totalTraces === 0
+                ? "还没有样本。这里返回的是「没有数据」，不是「零失败」。"
+                : report.totalTraces < 20
+                  ? "样本偏少(小于 20)，分布仅供参考，别拿它做结构性决策。"
+                  : undefined,
+          }),
+        ) as never;
+      } catch (e2) {
+        return toMcpResult(err("ATTRIBUTION_FAILED", e2 instanceof Error ? e2.message : String(e2))) as never;
+      }
+    },
+  );
+
   let dashboard: DashboardServerHandle | undefined;
   if (opts.dashboard) {
     dashboard = await startDashboardServer({
@@ -905,7 +1070,16 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Per MCP best practice: never log to stdout. Use stderr.
-  console.error("[seekfleet-mcp-server] stdio transport ready; " + SDK_CAPABILITIES.length + " tools registered");
+  // 这里行数容易误导：SDK_CAPABILITIES 是 discovery 里的能力清单（dsh.run 之类
+  // 的语义能力），跟 MCP 工具数不是一回事。以前两个数字恰好都是 20，改工具时
+  // 就会对不上还查不出原因 —— 分开打。
+  console.error(
+    "[seekfleet-mcp-server] stdio transport ready; " +
+      MCP_TOOL_NAMES.length +
+      " MCP tools, " +
+      SDK_CAPABILITIES.length +
+      " capabilities",
+  );
 }
 
 function buildDashboardSnapshot(): DashboardSnapshot {
@@ -970,7 +1144,101 @@ function toTask(args: Record<string, unknown>): DshTask {
     env: (args.env as Record<string, string> | undefined) ?? undefined,
     tags: Array.isArray(args.tags) ? (args.tags as string[]) : undefined,
     label: args.label as string | undefined,
+    role: args.role === undefined ? undefined : (args.role as string | RoleSpec),
+    verify: Array.isArray(args.verify) ? (args.verify as VerifyRule[]) : undefined,
+    thinkingTokenBudget: typeof args.thinkingTokenBudget === "number" ? args.thinkingTokenBudget : undefined,
+    effort: isEffort(args.effort) ? args.effort : undefined,
   };
+}
+
+function isEffort(v: unknown): v is DshTask["effort"] {
+  return v === "low" || v === "medium" || v === "high";
+}
+
+/**
+ * 把 MCP 传进来的松散对象窄化成 TraceView。
+ *
+ * 这里刻意不做「缺字段就补默认值」：classifyTrace 的语义是「有什么证据说什么话」，
+ * 补出来的字段会变成假证据。拿不准的字段直接丢掉。
+ */
+function toTraceView(raw: Record<string, unknown>): TraceView {
+  const view: TraceView = {};
+  if (typeof raw.task === "string") view.task = raw.task;
+  if (typeof raw.roleName === "string") view.roleName = raw.roleName;
+  if (typeof raw.answer === "string") view.answer = raw.answer;
+  if (typeof raw.exitCode === "number" || raw.exitCode === null) view.exitCode = raw.exitCode;
+  if (typeof raw.aborted === "boolean") view.aborted = raw.aborted;
+  if (typeof raw.errorCode === "string") view.errorCode = raw.errorCode;
+  if (typeof raw.durationMs === "number") view.durationMs = raw.durationMs;
+  if (typeof raw.declaredMaxToolCalls === "number") view.declaredMaxToolCalls = raw.declaredMaxToolCalls;
+  if (typeof raw.dependencyResultsInjected === "boolean") {
+    view.dependencyResultsInjected = raw.dependencyResultsInjected;
+  }
+  if (Array.isArray(raw.expectedArtifacts)) {
+    view.expectedArtifacts = raw.expectedArtifacts.filter((x): x is string => typeof x === "string");
+  }
+  if (Array.isArray(raw.toolCalls)) {
+    view.toolCalls = raw.toolCalls.map((c) => {
+      if (typeof c === "string") return c;
+      if (c && typeof c === "object" && typeof (c as { name?: unknown }).name === "string") {
+        return { name: (c as { name: string }).name, args: (c as { args?: unknown }).args };
+      }
+      return "";
+    });
+  }
+  if (Array.isArray(raw.toolResults)) {
+    view.toolResults = raw.toolResults
+      .filter((r): r is { name: string; ok: boolean } => {
+        return !!r && typeof r === "object" && typeof (r as { name?: unknown }).name === "string";
+      })
+      .map((r) => ({ name: (r as { name: string }).name, ok: (r as { ok?: unknown }).ok === true }));
+  }
+  if (Array.isArray(raw.upstream)) {
+    view.upstream = raw.upstream.map((u) => {
+      const o = (u ?? {}) as Record<string, unknown>;
+      return {
+        id: typeof o.id === "string" ? o.id : "",
+        answer: typeof o.answer === "string" ? o.answer : undefined,
+        status: typeof o.status === "string" ? o.status : undefined,
+      };
+    });
+  }
+  if (raw.verification && typeof raw.verification === "object") {
+    const v = raw.verification as Record<string, unknown>;
+    view.verification = {
+      ok: v.ok === true,
+      unknownKinds: Array.isArray(v.unknownKinds)
+        ? v.unknownKinds.filter((x): x is string => typeof x === "string")
+        : [],
+      checks: Array.isArray(v.checks)
+        ? v.checks.map((c) => {
+            const o = (c ?? {}) as Record<string, unknown>;
+            return {
+              kind: typeof o.kind === "string" ? o.kind : undefined,
+              ok: o.ok === true,
+              detail: typeof o.detail === "string" ? o.detail : undefined,
+            };
+          })
+        : [],
+    };
+  }
+  if (raw.roleAudit && typeof raw.roleAudit === "object") {
+    const r = raw.roleAudit as Record<string, unknown>;
+    view.roleAudit = {
+      ok: r.ok === true,
+      violations: Array.isArray(r.violations)
+        ? r.violations.map((x) => {
+            const o = (x ?? {}) as Record<string, unknown>;
+            return {
+              code: String(o.code ?? ""),
+              message: String(o.message ?? ""),
+              evidence: typeof o.evidence === "string" ? o.evidence : undefined,
+            };
+          })
+        : [],
+    };
+  }
+  return view;
 }
 
 export async function main(): Promise<void> {
