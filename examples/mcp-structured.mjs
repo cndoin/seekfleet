@@ -5,14 +5,40 @@ const cli = resolve("dist/bin/seekfleet.js");
 const child = spawn(process.execPath, [cli, "serve-mcp"], { stdio: ["pipe", "pipe", "inherit"] });
 
 const reqs = [
-  { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.1" } } },
+  {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.1" } },
+  },
   { jsonrpc: "2.0", method: "notifications/initialized" },
   // create cluster with 5 instances
-  { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dsh_cluster_create", arguments: { instances: [{ label: "i1" }, { label: "i2" }, { label: "i3" }, { label: "i4" }, { label: "i5" }], routing: "least-loaded" } } },
+  {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "dsh_cluster_create",
+      arguments: {
+        instances: [{ label: "i1" }, { label: "i2" }, { label: "i3" }, { label: "i4" }, { label: "i5" }],
+        routing: "least-loaded",
+      },
+    },
+  },
   // status with limit=2, offset=0
-  { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "dsh_cluster_status", arguments: { clusterId: "FROM_2", limit: 2, offset: 0 } } },
+  {
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { name: "dsh_cluster_status", arguments: { clusterId: "FROM_2", limit: 2, offset: 0 } },
+  },
   // status with limit=2, offset=4 (last page)
-  { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "dsh_cluster_status", arguments: { clusterId: "FROM_2", limit: 2, offset: 4 } } },
+  {
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: { name: "dsh_cluster_status", arguments: { clusterId: "FROM_2", limit: 2, offset: 4 } },
+  },
 ];
 
 const responses = new Map();
@@ -31,21 +57,37 @@ child.stdout.on("data", (chunk) => {
       // Once we have clusterId from id 2, send paginated calls
       if (msg.id === 2 && msg.result?.structuredContent?.data?.clusterId) {
         const cid = msg.result.structuredContent.data.clusterId;
-        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "dsh_cluster_status", arguments: { clusterId: cid, limit: 2, offset: 0 } } }) + "\n");
-        child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "dsh_cluster_status", arguments: { clusterId: cid, limit: 2, offset: 4 } } }) + "\n");
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 3,
+            method: "tools/call",
+            params: { name: "dsh_cluster_status", arguments: { clusterId: cid, limit: 2, offset: 0 } },
+          }) + "\n",
+        );
+        child.stdin.write(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 4,
+            method: "tools/call",
+            params: { name: "dsh_cluster_status", arguments: { clusterId: cid, limit: 2, offset: 4 } },
+          }) + "\n",
+        );
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 });
 
 for (const r of reqs.slice(0, 2)) {
   child.stdin.write(JSON.stringify(r) + "\n");
-  await new Promise(res => setTimeout(res, 200));
+  await new Promise((res) => setTimeout(res, 200));
 }
 // Send create now (id 2)
 child.stdin.write(JSON.stringify(reqs[2]) + "\n");
 
-await new Promise(res => setTimeout(res, 4000));
+await new Promise((res) => setTimeout(res, 4000));
 
 console.log("=== structuredContent + pagination test ===");
 

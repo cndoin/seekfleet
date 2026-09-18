@@ -10,9 +10,9 @@ console.log("[demo] dsh version:", insp.version, "at", insp.dshModuleRoot);
 const clusterId = plugin.cluster({
   profile: "headless",
   instances: [
-    { label: "code-1",   profile: "headless", tags: ["code", "default"], concurrency: 1 },
-    { label: "code-2",   profile: "headless", tags: ["code", "default"], concurrency: 1 },
-    { label: "research", profile: "headless", tags: ["research"],        concurrency: 1 },
+    { label: "code-1", profile: "headless", tags: ["code", "default"], concurrency: 1 },
+    { label: "code-2", profile: "headless", tags: ["code", "default"], concurrency: 1 },
+    { label: "research", profile: "headless", tags: ["research"], concurrency: 1 },
   ],
   routing: "tag",
 });

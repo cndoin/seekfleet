@@ -31,7 +31,15 @@ console.log("\n[2] SessionManager enforces policy at start()");
 const sm = new SessionManager({
   dshHome,
   policy: new PolicyEnforcer(loadPolicy(dshHome)),
-  runner: async (task) => ({ answer: "OK: " + task.task, toolCalls: [], toolResults: [], events: 0, durationMs: 0, exitCode: 0, stderrTail: "" }),
+  runner: async (task) => ({
+    answer: "OK: " + task.task,
+    toolCalls: [],
+    toolResults: [],
+    events: 0,
+    durationMs: 0,
+    exitCode: 0,
+    stderrTail: "",
+  }),
 });
 
 const r = sm.create({ task: "hi" });

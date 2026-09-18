@@ -96,7 +96,7 @@ const handoff = subtasks
     return {
       id: s.id,
       acceptance: s.acceptance,
-      worker: r.error ? "FAILED: " + r.error.message : r.audit?.role?.parsedOutput?.summary ?? "(no summary)",
+      worker: r.error ? "FAILED: " + r.error.message : (r.audit?.role?.parsedOutput?.summary ?? "(no summary)"),
     };
   })
   .map((x) => JSON.stringify(x))

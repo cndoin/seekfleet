@@ -59,8 +59,8 @@
     "test:cov": "vitest run --coverage",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\" \"examples/**/*.mjs\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\" \"examples/**/*.mjs\"",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build"
   },

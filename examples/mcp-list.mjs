@@ -5,7 +5,12 @@ const cli = resolve("dist/bin/seekfleet.js");
 const child = spawn(process.execPath, [cli, "serve-mcp"], { stdio: ["pipe", "pipe", "inherit"] });
 
 const reqs = [
-  { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.1" } } },
+  {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "0.1" } },
+  },
   { jsonrpc: "2.0", method: "notifications/initialized" },
   { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
 ];
@@ -36,13 +41,15 @@ child.stdout.on("data", (chunk) => {
         child.kill();
         setTimeout(() => process.exit(0), 200);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 });
 
 for (const r of reqs) {
   child.stdin.write(JSON.stringify(r) + "\n");
-  await new Promise(res => setTimeout(res, 200));
+  await new Promise((res) => setTimeout(res, 200));
 }
 
 setTimeout(() => process.exit(1), 8000);
