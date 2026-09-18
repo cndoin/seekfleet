@@ -202,7 +202,7 @@ The previous `DSH_DASHBOARD*` names remain accepted as compatibility aliases.
 - [`agents/openai.yaml`](./agents/openai.yaml) — AI client discovery metadata
 - [`docs/`](./docs/) — GitHub Pages product site and social preview asset
 - [`examples/`](./examples/) — MCP, SDK, adapter, and cluster examples
-- [`tests/`](./tests/) — 94 behavior and integration tests
+- [`tests/`](./tests/) — 133 behavior and integration tests
 
 ## Development
 

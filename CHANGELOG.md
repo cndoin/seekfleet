@@ -7,7 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Future changes will be listed here.
+### Fixed
+- **A crashed task no longer reports success.** `dsh` exits non-zero for hard
+  failures (missing credentials, invalid flags, a crashed tool) and prints
+  nothing on stdout. `summarize()` returned `{ answer: "", exitCode: 1 }` with
+  no `error`, and because the cluster, the DAG executor, the session manager
+  and every MCP tool keyed their success test off `error`, a failed run was
+  reported as `ok: true` — and its empty answer cached. A non-zero exit now
+  always surfaces as `error.code: "EXIT_NONZERO"` carrying the last stderr line.
+- **A DAG node that resolved with a failed result is now `failed`.** The node
+  status was keyed off "did the runner promise resolve". `cluster.route()`
+  deliberately resolves with soft failures rather than throwing, so every
+  crashed node was recorded as `ok` with an empty answer and its dependents
+  went on to run against that empty answer.
+- **A session whose runner resolved with a failed result is now `failed`**, not
+  `succeeded`. Polling a crashed background session reported completion.
+- **MCP task tools branch on the real outcome.** `dsh_run` and
+  `dsh_cluster_route` returned `ok: true` for a failed task; `dsh_run_stream`
+  returned `ok: true` for a stream ending on a non-zero exit (it does not
+  throw); `dsh_dag_run` returned `ok: true` with an empty `failed` list. All
+  four now return `ok: false` with the result/DAG preserved under `details`.
+- The CLI exits non-zero and prints the failure to stderr for a failed
+  `run` / `cluster route` / `cluster dag-run`, instead of exiting 0 with
+  `(no answer)`.
+- Aborted and timed-out tasks no longer report success. The stream closes with
+  an `error` event (not `exit`) when a task is aborted, and only `exit` was
+  parsed — so every timeout surfaced with `exitCode: null`, `durationMs: 0` and
+  no error field. That made the cluster cache poisoned results, count them as
+  breaker successes, and confirm budget reservations for work that never ran.
+  A partial answer no longer suppresses the `ABORTED` error either.
+- `skill install` no longer kills the process on Node.js 22 / Windows.
+  `fs.cpSync(src, dest, { recursive: true })` terminated Node 22.22.2 outright
+  (exit code 127, no exception, no stack trace) while copying the bundled
+  `agents/` directory, so the documented install command crashed. Directory
+  copies now walk the tree explicitly and skip symlinks.
+- `--target all` can no longer leave a partial install: every destination is
+  validated before the first byte is written.
+- `codex-status` / `codex-install` now detect the `disabled` flag. Two broken
+  regexes were involved — a `[\\s\\S]` character class built from an over-escaped
+  string literal, and a literal `/disabled\\s*=\\s*true/` — so a disabled server
+  was reported as enabled and the previous state was never recovered. Block
+  scanning is now scoped to `[mcp_servers.<name>]` so another server's
+  `disabled` key cannot be misattributed.
+- `codex-install` fails loudly instead of writing `command = ""` when no launch
+  command can be resolved, and a no-op install no longer rewrites the file.
+- Durable sessions are no longer quadratic. Every `appendEvent` was a full
+  read-parse-write-with-fsync of the whole record, so a 1500-event burst blocked
+  the event loop past a 30s timeout. Appends are coalesced in memory with an
+  explicit `flush()`, while `create` / `setStatus` / `addCheckpoint` stay
+  synchronous so crash recovery sees a consistent status.
+- The cluster no longer crashes on a concurrent scale-down: a routed instance
+  could be removed between `pick()` and dispatch, and the non-null assertion
+  turned that into a `TypeError`.
+- Cluster streaming read token usage from `evt.data` instead of `evt.data.usage`,
+  which pushed `NaN` token counts and costs into the cost tracker.
+- Cluster construction resolves the DSH runtime once instead of once per
+  instance (the fallback discovery path shells out to `npm root -g`), and the
+  result cache fingerprint now uses the real Harness version instead of a
+  hardcoded `0.1.0-rc.6` that never invalidated.
+- A policy that stripped every environment variable no longer falls back to the
+  caller's original env, which silently bypassed the gate and could leak
+  credentials. `ValidationResult` gains an explicit `envSanitized` flag.
+- Task prompts beginning with `-` are no longer parsed as CLI flags.
+- `run()` applies the policy gate once rather than twice.
+- `cluster dag-run` works. It always threw `cluster not found` because it looked
+  the cluster up in a freshly constructed, empty `SeekFleet` instance.
+- `cluster scale --persist` writes to the registry under `DSH_HOME`; it was
+  passing the workspace path as `dshHome`, so the update never landed.
+- `dsh_run_stream` returns an `ok: false` envelope on failure, matching the
+  documented contract, instead of `ok: true` with an error event embedded.
+- `dsh_run_stream` no longer points the model at the non-existent
+  `dsh_session_continue` tool; it now references `dsh_session_create` and
+  `dsh_session_events`.
+
+### Changed
+- `.well-known/mcp.json` is regenerated: it advertised the retired
+  `dsh-plugin-sdk` name, a dead homepage, a non-existent
+  `dist/bin/dsh-plugin.js` path, and only 13 of the 20 MCP tools. A test now
+  asserts it against the real registrations.
+- `.well-known` is included in the published package so harnesses can read the
+  manifest from an installed dependency.
+- CLI and MCP handshake versions are read from `package.json` instead of being
+  hardcoded, so they cannot drift again.
+- `dsh.cluster.create` in the capability schema now offers the documented
+  `adaptive` routing strategy.
+- `skill install --scope project --target <client>` writes to that client's own
+  project directory (`.claude/skills`, `.cursor/skills`, ...) instead of always
+  falling back to `.agents/skills`.
+- Discovery of the Harness module root is memoized, so SDK self-description and
+  cluster construction no longer repeat a blocking module walk per call.
+- The streaming integration test asserts that events arrive well before process
+  exit instead of an absolute 250ms wall-clock bound that process-spawn cost on
+  Windows exceeds on its own.
 
 ## [0.1.1] - 2026-08-17
 

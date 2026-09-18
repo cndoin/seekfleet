@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a new feature for dsh-plugin-sdk
+about: Suggest a new feature for seekfleet
 title: "[feature] "
 labels: ["enhancement"]
 assignees: []

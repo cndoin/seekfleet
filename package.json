@@ -17,6 +17,7 @@
   "files": [
     "dist",
     "SKILL.md",
+    ".well-known",
     "agents",
     "references",
     "evals",

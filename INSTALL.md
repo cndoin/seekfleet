@@ -78,11 +78,17 @@ User-scope destinations:
 | Gemini | `~/.gemini/skills/seekfleet` |
 | Open Agent Skills | `~/.agents/skills/seekfleet` |
 
-Project scope uses `.agents/skills/seekfleet`:
+Project scope uses `.agents/skills/seekfleet` by default, and each client's own
+project directory when a target is named explicitly:
 
 ```bash
-seekfleet skill install --scope project --force
+seekfleet skill install --scope project --force                    # .agents/skills/seekfleet
+seekfleet skill install --scope project --target claude --force    # .claude/skills/seekfleet
+seekfleet skill install --scope project --target cursor --force    # .cursor/skills/seekfleet
 ```
+
+Every destination is validated before anything is written, so a refusal (for
+example a missing `--force`) never leaves a half-installed skill behind.
 
 ## DSH runtime
 

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug in dsh-plugin-sdk
+about: Report a bug in seekfleet
 title: "[bug] "
 labels: ["bug", "triage"]
 assignees: []
@@ -14,14 +14,14 @@ A clear and concise description of what the bug is.
 
 ```ts
 // minimal code snippet
-import { DshPlugin } from "dsh-plugin-sdk";
+import { SeekFleet } from "seekfleet";
 // ...
 ```
 
 or CLI:
 
 ```bash
-node node_modules/.bin/dsh-plugin run "..."
+npx seekfleet run "..."
 ```
 
 ## Expected behavior
@@ -36,8 +36,9 @@ What actually happened. Include stderr / stack trace.
 
 - Node version: `node --version`
 - OS:
-- `npm ls @deepseek-ai/dsh dsh-plugin-sdk`
-- `dsh --version`
+- `npm ls seekfleet @deepseek-ai/dsh`
+- `npx seekfleet --version`
+- `npx seekfleet inspect`
 
 ## Additional context
 
