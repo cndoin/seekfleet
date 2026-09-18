@@ -1,6 +1,12 @@
 // Shared types for the DSH plugin SDK.
 // All types are AI-friendly: stable JSON shapes, no Date / Map / class hidden state.
 
+// 这三个是 type-only 引用：编译后被完全擦除，所以不会和 role-spec / verifier /
+// mast 形成运行时的循环依赖（它们反过来 importing types.ts）。
+import type { RoleSpec, RoleViolation } from "./role-spec.js";
+import type { VerifyReport, VerifyRule } from "./verifier.js";
+import type { FailureAttribution } from "./mast.js";
+
 export type DshEventKind =
   "stdout" | "stderr" | "log" | "tool_call" | "tool_result" | "subagent" | "usage" | "answer" | "exit" | "error";
 
@@ -41,6 +47,8 @@ export interface DshResult {
   exitCode: number | null;
   stderrTail: string;
   error?: { message: string; code?: string };
+  /** 角色契约审计 / 独立验证 / token 预算 / 失败归因。 */
+  audit?: DshTaskAudit;
 }
 
 export interface DshTask {
@@ -55,6 +63,46 @@ export interface DshTask {
   label?: string;
   /** P0-10: max total bytes before the process is killed. */
   maxOutputBytes?: number;
+  /**
+   * 角色契约：内置部门名（planner / worker / reviewer / synthesizer）或一份
+   * 完整 spec。会被编译成 XML 契约注入 prompt，并在任务结束后做合规审计。
+   * 未知部门名视为错误而不是回退到默认角色。
+   */
+  role?: string | RoleSpec;
+  /**
+   * 任务结束后由**框架**独立执行的校验规则。
+   * 模型自评不可靠，这一层是 MAST 里 ~23% 验证类失败的主要防线。
+   */
+  verify?: VerifyRule[];
+  /**
+   * 思考 token 预算（Tran & Kiela, arXiv:2604.02460）。超过只是记录到
+   * result.budget.exceeded，不自动阻断——因为多花的钱有时是值得的，
+   * 但你必须能看见它。
+   */
+  thinkingTokenBudget?: number;
+  /** 工作量档位。上层据此决定并行度，避免简单问题开出几十个子 agent。 */
+  effort?: "low" | "medium" | "high";
+}
+
+/** 任务执行后的审计附加信息。全部可选，不写不代表通过，只代表没装设检测。 */
+export interface DshTaskAudit {
+  role?: {
+    name: string;
+    ok: boolean;
+    violations: RoleViolation[];
+    toolCalls: number;
+    parsedOutput?: unknown;
+    /** schema 里存在但校验器不支持的约束（这些规则实际没生效）。 */
+    unsupportedSchemaKeys?: string[];
+  };
+  verification?: VerifyReport;
+  budget?: {
+    thinkingTokens: number;
+    budget?: number;
+    exceeded: boolean;
+  };
+  /** MAST 归因。仅在检出失败信号时出现；成功运行不生成。 */
+  attribution?: FailureAttribution;
 }
 
 export interface DshInstanceSpec {
@@ -76,6 +124,13 @@ export interface DshClusterSpec {
   workspace?: string;
   dshHome?: string;
   healthIntervalMs?: number;
+  /**
+   * 一次 DAG 最多允许多少个并行节点。这是 effort scaling 的硬闸门：
+   * 不明确设上限，模型会倾向于无限拆分。
+   */
+  maxParallelSubtasks?: number;
+  /** 每个 effort 档位允许的实例数，用于 recommendFanout()。 */
+  effortPolicy?: { low?: number; medium?: number; high?: number };
 }
 
 export type DshInstanceState = "starting" | "ready" | "busy" | "draining" | "down" | "stopped";
@@ -133,6 +188,17 @@ export interface DshClusterStatus {
     filesShared: number;
     bytesShared: number;
   };
+  /**
+   * 失败归因聚合（MAST）。回答「这批任务在哪一类失败上最吃亏」。
+   * 仅在已有失败记录时出现。
+   */
+  attribution?: {
+    totalTraces: number;
+    failedTraces: number;
+    failureRate: number;
+    byCategory: Array<{ category: string; count: number; share: number }>;
+    top: Array<{ code: string; labelZh: string; count: number; fix: string }>;
+  };
 }
 
 export interface DagNodeSpec {
@@ -144,6 +210,11 @@ export interface DagNodeSpec {
   timeoutMs?: number;
   critical?: boolean;
   includeDependencyResults?: boolean;
+  /** 节点级角色契约：内置部门名或完整 spec。 */
+  role?: string | RoleSpec;
+  /** 节点级独立验证规则。 */
+  verify?: VerifyRule[];
+  effort?: "low" | "medium" | "high";
 }
 
 export interface DagSpec {
@@ -152,6 +223,13 @@ export interface DagSpec {
   abortOnFailure?: boolean;
   maxDependencyChars?: number;
   defaults?: Partial<DshTask>;
+  /**
+   * 节点数上限。Anthropic 在生产里踩过的坑：不写明 effort 规则，模型会为一个
+   * 简单问题开出几十个子 agent。超限时直接拒绝执行，而不是替它跑完。
+   */
+  maxNodes?: number;
+  /** 并行度上限，独立于 concurrency（concurrency 可能来自调用方的默认值）。 */
+  maxParallel?: number;
 }
 
 export interface DshCapability {

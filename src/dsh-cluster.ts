@@ -28,6 +28,17 @@ import { MetricsRegistry } from "./metrics.js";
 import { PolicyEnforcer } from "./policy-enforcer.js";
 import { DagExecutor } from "./task-dag.js";
 import { ReplayRecorder } from "./replay-recorder.js";
+import {
+  DEPARTMENTS,
+  attachRoleContract,
+  auditRoleRun,
+  getDepartment,
+  validateRoleSpec,
+  type RoleAudit,
+  type RoleSpec,
+} from "./role-spec.js";
+import { verifyResult } from "./verifier.js";
+import { aggregateFailures, classifyTrace, type FailureAttribution, type MastReport, type TraceView } from "./mast.js";
 import type {
   DshClusterSpec,
   DshClusterStatus,
@@ -37,8 +48,23 @@ import type {
   DshInstanceState,
   DshResult,
   DshTask,
+  DshTaskAudit,
   DagSpec,
 } from "./types.js";
+
+/**
+ * 归因环形缓冲的上限。
+ *
+ * 为什么要限额：归因对象里带着 evidence 字符串，长任务集群跑上几千次之后
+ * 这就是个慢性内存泄漏。200 条足够算出稳定的分布。
+ */
+const MAX_ATTRIBUTIONS = 200;
+
+/**
+ * effort 档位的默认并行度（Anthropic 在生产里踩过的坑：不写这条规则，
+ * 模型会为一个简单问题开出几十个子 agent）。
+ */
+const DEFAULT_EFFORT_POLICY: Record<"low" | "medium" | "high", number> = { low: 1, medium: 3, high: 8 };
 
 export interface DshClusterOptions extends DshClusterSpec {
   client?: ConstructorParameters<typeof DshClient>[0];
@@ -103,11 +129,17 @@ export class DshCluster extends EventEmitter {
   readonly capabilities!: CapabilityRegistry; // initialized in constructor
   /** PART-2: optional policy enforcer that gates every route() / stream() call. */
   readonly policy?: PolicyEnforcer;
+  /** 一次 DAG 允许的最大并行节点数（effort scaling 的硬闸门）。 */
+  readonly maxParallelSubtasks: number;
+  /** 每个 effort 档位允许的实例数。 */
+  readonly effortPolicy: Record<"low" | "medium" | "high", number>;
   private autoScaler?: AutoScaler;
   private workspaceSync?: WorkspaceSync;
   private readonly useCache: boolean;
   private readonly useBreaker: boolean;
   private readonly taskFlights = new Map<string, Promise<DshResult & { instance: string; cached?: boolean }>>();
+  /** 最近若干次运行的失败归因（含成功样本，failureRate 才有意义）。 */
+  private readonly attributions: FailureAttribution[] = [];
 
   constructor(opts: DshClusterOptions) {
     super();
@@ -136,6 +168,17 @@ export class DshCluster extends EventEmitter {
     (this as { capabilities: CapabilityRegistry }).capabilities = new CapabilityRegistry(this.resolveDshHome());
     this.useCache = enableCache ?? !!cacheDir;
     this.useBreaker = enableBreaker ?? true;
+
+    // effort scaling：并行度上限同时受集群闸门和当前实例数约束。
+    this.maxParallelSubtasks = Math.max(1, rest.maxParallelSubtasks ?? 8);
+    this.effortPolicy = {
+      low: Math.max(1, Math.min(rest.effortPolicy?.low ?? DEFAULT_EFFORT_POLICY.low, this.maxParallelSubtasks)),
+      medium: Math.max(
+        1,
+        Math.min(rest.effortPolicy?.medium ?? DEFAULT_EFFORT_POLICY.medium, this.maxParallelSubtasks),
+      ),
+      high: Math.max(1, Math.min(rest.effortPolicy?.high ?? DEFAULT_EFFORT_POLICY.high, this.maxParallelSubtasks)),
+    };
 
     // Initialize CostTracker (P0-3: pass pricing through)
     (this as { cost: CostTracker }).cost = new CostTracker(pricing);
@@ -209,12 +252,17 @@ export class DshCluster extends EventEmitter {
   async route(task: DshTask | string): Promise<DshResult & { instance: string; cached?: boolean }> {
     const original: DshTask = typeof task === "string" ? { task } : task;
     // PART-2: enforce policy before any side effects
-    const t: DshTask = this.policy
+    const policyChecked: DshTask = this.policy
       ? this.policy.assert(original, {
           estimatedCostUsd: this.estimateTaskCost(original, original.profile ?? this.spec.profile ?? "headless"),
           estimatedRuntimeMs: original.timeoutMs,
         })
       : original;
+    // 角色契约必须在缓存查表之前注入：同一段话交给 planner 和交给 reviewer
+    // 是两次不同的任务，缓存键必须体现这个差异。
+    const prepared = this.prepareRole(policyChecked);
+    const t: DshTask = prepared.task;
+    const role = prepared.role;
     const profile = t.profile ?? this.spec.profile ?? "headless";
     const cacheContext = {
       cwd: t.cwd ?? this.spec.workspace,
@@ -312,6 +360,11 @@ export class DshCluster extends EventEmitter {
         result = await slot.client.run(this.taskForSlot(slot, t));
       }
       slot.totalRun++;
+      // —— 组织层：契约审计 + 独立验证 + 失败归因 ——
+      // 这一步把「退出码干净」和「任务真的做成了」区分开。没有这一层，
+      // 一个越权改了文件但什么都没完成的 run 会被当成成功并写进缓存。
+      const governed = await this.applyGovernance(t, role, result);
+      result = governed.result;
       if (result.error || (result.exitCode !== null && result.exitCode !== 0)) {
         slot.totalErrors++;
         outcome = "err";
@@ -377,6 +430,179 @@ export class DshCluster extends EventEmitter {
         this.taskFlights.delete(flightKey);
       }
     }
+  }
+
+  /**
+   * 解析任务里的角色契约并把它编译进 prompt。
+   *
+   * **未知部门名直接抛错，不回退到默认角色**：调用方以为自己在跟 planner 说话，
+   * 实际拿到一个没有约束的执行者，这种静默降级就是「违反角色设定」的来源。
+   */
+  prepareRole(t: DshTask): { task: DshTask; role?: RoleSpec } {
+    if (!t.role) return { task: t };
+    const spec = typeof t.role === "string" ? getDepartment(t.role) : t.role;
+    if (!spec) {
+      throw new Error(
+        "dsh-cluster: unknown department '" +
+          String(typeof t.role === "string" ? t.role : t.role.name) +
+          "' (built-ins: " +
+          Object.keys(DEPARTMENTS).join(", ") +
+          ")",
+      );
+    }
+    const problems = validateRoleSpec(spec);
+    if (problems.length > 0) throw new Error("dsh-cluster: invalid role spec: " + problems.join("; "));
+    return { task: { ...t, task: attachRoleContract(t.task, spec) }, role: spec };
+  }
+
+  /**
+   * 组织层闸门：契约审计 + 独立验证 + token 预算 + 失败归因。
+   *
+   * 这里最重要的副作用是**把契约违约翻译成 result.error**。上层所有分支
+   * （缓存、断路器、DAG 节点状态、MCP 信封、CLI 退出码）都以 `result.error`
+   * 作为失败判定；如果只把违规塞进 audit 而不设 error，一次越权的运行会一路
+   * 被当成成功，还会把答案写进缓存污染后续调用。
+   */
+  async applyGovernance(
+    t: DshTask,
+    role: RoleSpec | undefined,
+    raw: DshResult,
+  ): Promise<{ result: DshResult; ok: boolean }> {
+    const audit: DshTaskAudit = {};
+    let roleAudit: RoleAudit | undefined;
+
+    if (role) {
+      roleAudit = auditRoleRun(role, raw);
+      audit.role = {
+        name: roleAudit.role,
+        ok: roleAudit.ok,
+        violations: roleAudit.violations,
+        toolCalls: roleAudit.toolCalls,
+        parsedOutput: roleAudit.parsedOutput,
+        unsupportedSchemaKeys: roleAudit.unsupportedSchemaKeys,
+      };
+    }
+
+    // 验证层即使在运行失败时也要跑：任务崩了但产物已经落盘一半是常见情况，
+    // 「崩在哪一步」恰恰只有验证命令能告诉你。
+    if (t.verify && t.verify.length > 0) {
+      audit.verification = await verifyResult(t.verify, {
+        result: raw,
+        cwd: t.cwd ?? this.spec.workspace,
+      });
+    }
+
+    const thinkingTokens = raw.usage?.totalTokens ?? 0;
+    if (t.thinkingTokenBudget !== undefined || thinkingTokens > 0) {
+      audit.budget = {
+        thinkingTokens,
+        budget: t.thinkingTokenBudget,
+        exceeded: t.thinkingTokenBudget !== undefined && thinkingTokens > t.thinkingTokenBudget,
+      };
+    }
+
+    const baseFailed = raw.error !== undefined;
+    const contractOk = roleAudit?.ok ?? true;
+    const verifyOk = audit.verification?.ok ?? true;
+    let result: DshResult = Object.keys(audit).length > 0 ? { ...raw, audit } : raw;
+
+    if (!baseFailed && !contractOk && !verifyOk) {
+      result = {
+        ...result,
+        error: {
+          code: "VERIFY_FAILED",
+          message:
+            "契约与验证均未通过: " +
+            (roleAudit?.violations.map((v) => v.code + " " + v.message).join(" ; ") ?? "") +
+            " | " +
+            (audit.verification?.checks
+              .filter((c) => !c.ok)
+              .map((c) => c.name + ": " + c.detail)
+              .join(" ; ") ?? ""),
+        },
+      };
+    } else if (!baseFailed && !contractOk) {
+      result = {
+        ...result,
+        error: {
+          code: "ROLE_CONTRACT_VIOLATION",
+          message: roleAudit!.violations.map((v) => v.code + ": " + v.message).join(" ; "),
+        },
+      };
+    } else if (!baseFailed && !verifyOk) {
+      result = {
+        ...result,
+        error: {
+          code: "VERIFY_FAILED",
+          message:
+            audit.verification?.checks
+              .filter((c) => !c.ok)
+              .map((c) => c.name + ": " + c.detail)
+              .join(" ; ") ?? "verification failed",
+        },
+      };
+    }
+
+    const ok = result.error === undefined;
+    const attribution = this.attribute(t, role, result, audit);
+    if (attribution.signals.length > 0) result = { ...result, audit: { ...(result.audit ?? audit), attribution } };
+    return { result, ok };
+  }
+
+  /** 生成一次运行的 MAST 归因并入环形缓冲。成功样本也记账，failureRate 才有意义。 */
+  private attribute(
+    t: DshTask,
+    role: RoleSpec | undefined,
+    result: DshResult,
+    audit: DshTaskAudit,
+  ): FailureAttribution {
+    const view: TraceView = {
+      task: t.task,
+      roleName: role?.name,
+      answer: result.answer,
+      exitCode: result.exitCode,
+      // summarize() 把被中断的运行标记为 ABORTED，这是「没做完」区别于「做错了」的唯一线索。
+      aborted: result.error?.code === "ABORTED",
+      errorCode: result.error?.code,
+      toolCalls: result.toolCalls,
+      toolResults: result.toolResults,
+      durationMs: result.durationMs,
+      declaredMaxToolCalls: role?.maxToolCalls,
+      verification: audit.verification
+        ? {
+            ok: audit.verification.ok,
+            unknownKinds: audit.verification.unknownKinds,
+            checks: audit.verification.checks.map((c) => ({ kind: c.kind, ok: c.ok, detail: c.detail })),
+          }
+        : undefined,
+      roleAudit: audit.role ? { ok: audit.role.ok, violations: audit.role.violations } : undefined,
+    };
+    const attribution = classifyTrace(view);
+    this.attributions.push(attribution);
+    if (this.attributions.length > MAX_ATTRIBUTIONS) this.attributions.shift();
+    // 弱信号（无法确定的推断）不上事件总线，避免把 noisy alert 灌进 dashboard。
+    if (attribution.primary && attribution.primary.confidence >= 0.7) {
+      this.emit("failure_attributed", { task: { label: t.label, role: role?.name }, attribution });
+    }
+    return attribution;
+  }
+
+  /** 批量归因报告：这批任务到底在哪一类失败上最吃亏。 */
+  attributionReport(): MastReport {
+    return aggregateFailures(this.attributions);
+  }
+
+  /**
+   * 按 effort 档给出建议并行实例数。
+   *
+   * 目的很实际：Anthropic 在生产里发现，不写死 effort 规则的话，模型会为一个
+   * 简单问题开出几十个子 agent。这里把上限钉死，最多給到集群当前的实际
+   * 规模——推荐 8 个实例而集群只有 2 个是没有意义的。
+   */
+  recommendFanout(effort: "low" | "medium" | "high" = "medium"): number {
+    const wanted = this.effortPolicy[effort] ?? DEFAULT_EFFORT_POLICY[effort];
+    const alive = Array.from(this.slots.values()).filter((s) => s.state !== "stopped" && s.state !== "down").length;
+    return Math.max(1, Math.min(wanted, this.maxParallelSubtasks, alive > 0 ? alive : 1));
   }
 
   /** Streaming version with optional replay recording. */
@@ -521,6 +747,20 @@ export class DshCluster extends EventEmitter {
             bytesShared: this.workspaceSync.stats().bytesShared,
           }
         : undefined,
+      attribution: this.attributionSummary(),
+    };
+  }
+
+  /** status() 用的归因摘要；还没有样本时返回 undefined（0 和「没数据」不能混为一谈）。 */
+  private attributionSummary(): DshClusterStatus["attribution"] {
+    if (this.attributions.length === 0) return undefined;
+    const report = aggregateFailures(this.attributions);
+    return {
+      totalTraces: report.totalTraces,
+      failedTraces: report.failedTraces,
+      failureRate: report.failureRate,
+      byCategory: report.byCategory,
+      top: report.rows.slice(0, 5).map((r) => ({ code: r.code, labelZh: r.labelZh, count: r.count, fix: r.fix })),
     };
   }
 
@@ -556,13 +796,21 @@ export class DshCluster extends EventEmitter {
     return this.status();
   }
 
-  /** Run a DAG of dependent tasks. */
+  /**
+   * Run a DAG of dependent tasks.
+   *
+   * 并行度在这里被集群的 maxParallelSubtasks 兜住 —— 单个调用方可以声明一个
+   * 更小的 concurrency，但不能越过集群的 effort 闸门。
+   */
   async runDag(spec: DagSpec): Promise<ReturnType<DagExecutor["run"]>> {
     const executor = new DagExecutor(async (t) => {
       const r = await this.route(t);
       return { result: r, instance: r.instance, cached: r.cached };
     });
-    return await executor.run(spec);
+    return await executor.run({
+      ...spec,
+      maxParallel: spec.maxParallel ?? this.maxParallelSubtasks,
+    });
   }
 
   /** Estimate current queue depth (in-flight count). */

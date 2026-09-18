@@ -6,6 +6,9 @@
 // Failed nodes can either abort the whole DAG or continue (configurable).
 
 import type { DshResult, DshTask } from "./types.js";
+import type { RoleSpec } from "./role-spec.js";
+import type { VerifyRule } from "./verifier.js";
+import type { FailureAttribution } from "./mast.js";
 
 export interface DagNode {
   id: string;
@@ -19,6 +22,11 @@ export interface DagNode {
   critical?: boolean;
   /** Append completed dependency answers as structured context (default true). */
   includeDependencyResults?: boolean;
+  /** 节点级角色契约：内置部门名或完整 spec。 */
+  role?: string | RoleSpec;
+  /** 节点级独立验证规则，节点跑完后由框架执行。 */
+  verify?: VerifyRule[];
+  effort?: "low" | "medium" | "high";
 }
 
 export interface DagSpec {
@@ -29,6 +37,13 @@ export interface DagSpec {
   defaults?: Partial<DshTask>;
   /** Maximum dependency context appended to one task (default 20000 chars). */
   maxDependencyChars?: number;
+  /**
+   * 节点数上限。Anthropic 在生产里踩过的坑：不写这条，模型会为一个简单问题
+   * 拆出几十个子 agent。超限时拒绝执行（fast fail），而不是替它跑完再说。
+   */
+  maxNodes?: number;
+  /** 并行度上限；由集群的 maxParallelSubtasks 注入。 */
+  maxParallel?: number;
 }
 
 export interface DagNodeResult {
@@ -59,6 +74,8 @@ export interface DagResult {
   /** ids of nodes that returned from cache */
   cacheHits: string[];
   aborted: boolean;
+  /** 每个失败节点的 MAST 归因（键为节点 id）。成功节点不出现。 */
+  attribution: Record<string, FailureAttribution>;
 }
 
 export type NodeRunner = (task: DshTask) => Promise<{ result: DshResult; instance?: string; cached?: boolean }>;
@@ -69,7 +86,16 @@ export class DagExecutor {
   async run(spec: DagSpec): Promise<DagResult> {
     const startedAt = Date.now();
     const abortOnFailure = spec.abortOnFailure ?? true;
-    const concurrency = Math.max(1, spec.concurrency ?? 4);
+    // 并行度同时受调用方声明和集群/上层注入的闸门约束，取更小者。
+    const declaredConcurrency = spec.concurrency ?? 4;
+    const concurrency = Math.max(1, Math.min(declaredConcurrency, spec.maxParallel ?? Number.POSITIVE_INFINITY));
+    // effort scaling 的硬闸门：拆分本身就是有损的（每次交接只丢信息不增加信息），
+    // 一个 50 节点的 DAG 多半是「被拆多了」而不是「真的需要 50 步」。
+    if (spec.maxNodes !== undefined && spec.nodes.length > spec.maxNodes) {
+      throw new Error(
+        `dag: ${spec.nodes.length} nodes exceeds maxNodes ${spec.maxNodes} — simplify the plan before running`,
+      );
+    }
     const byId = new Map<string, DagNode>();
     for (const n of spec.nodes) {
       if (!n.id.trim()) throw new Error("dag: node id must not be empty");
@@ -91,6 +117,7 @@ export class DagExecutor {
     const pending = new Set(spec.nodes.map((n) => n.id));
     const failed: string[] = [];
     const cacheHits: string[] = [];
+    const attribution: Record<string, FailureAttribution> = {};
     let aborted = false;
 
     while (pending.size > 0 && !aborted) {
@@ -135,6 +162,11 @@ export class DagExecutor {
                     profile: node.profile,
                     tags: node.tags,
                     timeoutMs: node.timeoutMs,
+                    // 角色契约与验证规则跟着节点走 —— 同一个 DAG 里 planner 和
+                    // reviewer 承担的义务本来就不同。
+                    role: node.role,
+                    verify: node.verify,
+                    effort: node.effort,
                     ...(spec.defaults ?? {}),
                   }
                 : ({ ...spec.defaults, ...node.task, id: undefined } as DshTask);
@@ -155,6 +187,11 @@ export class DagExecutor {
             // as a successful node with an empty answer.
             const failure = describeResultFailure(result);
             if (failure) {
+              // 失败节点的归因随结果一起回传：cluster.route 已经把MAST 分类挂在
+              // result.audit.attribution 上，这里只需要透出。**成功节点不写** ——
+              // 归因是给失败用的，给每个节点都贴一堆信号只会淹没真正的问题。
+              const nodeAttribution = result?.audit?.attribution;
+              if (nodeAttribution && nodeAttribution.signals.length > 0) attribution[node.id] = nodeAttribution;
               nodeResults.set(node.id, {
                 id: node.id,
                 status: "failed",
@@ -248,6 +285,7 @@ export class DagExecutor {
       failed,
       cacheHits,
       aborted,
+      attribution,
     };
   }
 }
