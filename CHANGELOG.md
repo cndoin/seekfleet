@@ -58,8 +58,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default `governed` mode, and stops the moment a retry reproduces the identical
   failure set. `result.audit.repair` reports `rescued` / `attemptsUsed` /
   `stopReason` / `hint`. Same rules apply to DAG nodes via `node.selfRepair`.
+- **`cluster.stream()` now runs the same governance gate as `route()`.** The role
+  contract is injected before the stream opens, and once the stream closes the
+  collected events are summarised and put through the role audit, the independent
+  verification rules and MAST attribution. When the process exited cleanly but the
+  contract or the acceptance checks failed, a terminal `error` event is appended
+  (`data.stage: "governance"`) so a consumer reading the event stream cannot
+  mistake it for a success — the events already emitted cannot be recalled, so the
+  terminal event is the only honest signal left. The budget reservation is
+  released rather than confirmed on such a run.
 
 ### Fixed
+- **The streaming path bypassed the whole governance layer.** `cluster.stream()`
+  only inspected the exit code and the `error` events, so a run that exited 0 while
+  violating its role contract — or failing every acceptance rule — was recorded as
+  a success: budget confirmed, router scored it as good, no attribution sample.
+  This is the same silent-success class the rest of this release removes, just on
+  a different code path, and it reached SDK users through
+  `HarnessSdk.clusterStream()`. Verified by `tests/cluster-stream-governance.test.ts`.
 - **`route()` consumed a round-robin slot just to check availability.** The
   pre-flight `pick()` advanced the round-robin cursor before the real dispatch
   picked again, so consecutive calls landed on the same instance. Replaced with a

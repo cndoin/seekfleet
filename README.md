@@ -165,6 +165,13 @@ A contract violation becomes a **failure** (`error.code:
 "ROLE_CONTRACT_VIOLATION"` / `"VERIFY_FAILED"`), not a warning, and a run that
 failed its contract is never written to the result cache.
 
+Both `cluster.route()` and `cluster.stream()` go through that gate. Streaming is
+the harder case because the events have already been handed to the consumer by the
+time the verdict lands: if the process exited cleanly but the contract or the
+acceptance checks failed, the stream is closed with a terminal `error` event
+(`data.stage: "governance"`) and the budget reservation is released rather than
+confirmed. A clean exit code is not a passing grade.
+
 ### Self-correction: closing the loop
 
 Knowing a task failed is not the same as fixing it. With `selfRepair`, a failed

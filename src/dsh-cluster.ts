@@ -14,7 +14,7 @@
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DshClient } from "./dsh-client.js";
+import { DshClient, summarize } from "./dsh-client.js";
 import { CircuitBreaker } from "./circuit-breaker.js";
 import { ResultCache } from "./result-cache.js";
 import { CostTracker } from "./cost-tracker.js";
@@ -723,18 +723,33 @@ export class DshCluster extends EventEmitter {
     return Math.max(1, Math.min(wanted, this.maxParallelSubtasks, alive > 0 ? alive : 1));
   }
 
-  /** Streaming version with optional replay recording. */
+  /**
+   * Streaming version with optional replay recording.
+   *
+   * 流式路径**同样要过治理层**。之前的实现只看退出码和 error 事件，于是一条
+   * 「退出码 0、但违反了角色契约 / 没通过独立验证」的流式运行会被记成成功：
+   * 预算确认、路由记成功、不产生任何归因。这正是本轮要根除的静默成功，只不过
+   * 换了一条路径。
+   *
+   * 难点在于事件已经实时吐给调用方了，收不回来。所以补救办法是：治理失败时
+   * 补发一个终态 `error` 事件，并且**不确认预算**（按失败释放）。
+   */
   async *stream(
     task: DshTask | string,
     opts: { record?: { dir: string } } = {},
   ): AsyncGenerator<DshEvent & { instance: string }> {
     const original: DshTask = typeof task === "string" ? { task } : task;
-    const t: DshTask = this.policy
+    const base: DshTask = this.policy
       ? this.policy.assert(original, {
           estimatedCostUsd: this.estimateTaskCost(original, original.profile ?? this.spec.profile ?? "headless"),
           estimatedRuntimeMs: original.timeoutMs,
         })
       : original;
+    // 契约必须在建流之前注入：模型收不到约束，事后审计只会一轮轮报违约，
+    // 而调用方会以为「配了 role 但没生效」。
+    const prepared = this.prepareRole(base);
+    const t = prepared.task;
+    const role = prepared.role;
     const recorder = opts.record
       ? new ReplayRecorder({ task: t.task, instanceLabel: "stream", profile: t.profile ?? "" })
       : null;
@@ -753,6 +768,10 @@ export class DshCluster extends EventEmitter {
     const startedAt = Date.now();
     let outcome: "ok" | "err" = "ok";
     let usage: DshResult["usage"];
+    /** 流自身（退出码 / error 事件）看起来是否干净。治理层是另一回事。 */
+    let streamClean = true;
+    /** 只收真实事件：补发的终态事件不进这里，否则 summarize 会把它自己算进去。 */
+    const collected: DshEvent[] = [];
     try {
       for await (const evt of slot.client.stream(this.taskForSlot(slot, t))) {
         // The classifier wraps the payload, so a usage line arrives as
@@ -762,14 +781,40 @@ export class DshCluster extends EventEmitter {
           const d = evt.data as { usage?: DshResult["usage"] } & Partial<NonNullable<DshResult["usage"]>>;
           usage = d.usage ?? (typeof d.inputTokens === "number" ? (d as DshResult["usage"]) : undefined);
         }
-        if (evt.kind === "error") outcome = "err";
+        if (evt.kind === "error") streamClean = false;
         if (evt.kind === "exit") {
           const data = evt.data as { exitCode?: number | null };
-          if (data.exitCode !== undefined && data.exitCode !== null && data.exitCode !== 0) outcome = "err";
+          if (data.exitCode !== undefined && data.exitCode !== null && data.exitCode !== 0) streamClean = false;
         }
         recorder?.record(evt);
+        collected.push(evt);
         yield { ...evt, instance: pick.label };
       }
+      // —— 组织层闸门：与 route() 走同一个入口 ——
+      // 退出码干净 ≠ 任务做成了。契约违约和验收失败在这里被翻译成 error，
+      // 从而让「成功」的判定和调用方的观感对齐。
+      const governed = await this.applyGovernance(t, role, summarize(collected), { recordAttribution: true });
+      outcome = streamClean && governed.result.error === undefined ? "ok" : "err";
+      if (governed.result.error) {
+        slot.lastError = governed.result.error.message;
+        // 流本身干净、失败是治理层发现的 —— 消费方此前只看到一堆正常增量，
+        // 必须补发终态事件，否则它会认为这次成功了。
+        if (streamClean) {
+          yield {
+            kind: "error",
+            ts: Date.now(),
+            seq: (collected[collected.length - 1]?.seq ?? 0) + 1,
+            data: {
+              message: governed.result.error.message,
+              code: governed.result.error.code,
+              stage: "governance",
+              audit: governed.result.audit,
+            },
+            instance: pick.label,
+          };
+        }
+      }
+      this.emit("task_done", { instance: pick.label, task: { label: t.label, tags: t.tags }, result: governed.result });
       slot.totalRun++;
       if (outcome === "err") slot.totalErrors++;
       if (usage) {
