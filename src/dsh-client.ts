@@ -160,13 +160,25 @@ export class DshClient extends EventEmitter {
 
     const queue = makeAsyncQueue<DshEvent>();
 
+    // Set when the child could not be spawned at all, so the terminal event
+    // carries a reason instead of looking like a quiet, successful exit.
+    let spawnErrorMessage: string | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     const killTree = (signal: NodeJS.Signals) => killProcessTree(proc, signal);
+    // Every force-kill arms the same slot. Assigning without clearing leaked
+    // the previous handle: `finish()` only cleared the newest one, so an
+    // earlier SIGKILL could still fire later and the stale timer kept the
+    // event loop alive after the child was already gone.
+    const scheduleForceKill = () => {
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+      forceKillTimer.unref?.();
+    };
 
     const timer = setTimeout(() => {
       aborted = true;
       killTree("SIGTERM");
-      forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+      scheduleForceKill();
     }, task.timeoutMs ?? this.defaultTimeoutMs);
 
     let signalListener: (() => void) | undefined;
@@ -178,7 +190,7 @@ export class DshClient extends EventEmitter {
       const onAbort = () => {
         aborted = true;
         killTree("SIGTERM");
-        forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+        scheduleForceKill();
       };
       if (task.signal.aborted) {
         onAbort();
@@ -218,7 +230,7 @@ export class DshClient extends EventEmitter {
       if (maxOutputBytes > 0 && stdoutBytes + stderrBytes > maxOutputBytes) {
         aborted = true;
         killTree("SIGTERM");
-        forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+        scheduleForceKill();
         return;
       }
       const r = handleChunk(
@@ -245,7 +257,7 @@ export class DshClient extends EventEmitter {
       if (maxOutputBytes > 0 && stdoutBytes + stderrBytes > maxOutputBytes) {
         aborted = true;
         killTree("SIGTERM");
-        forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+        scheduleForceKill();
         return;
       }
       const r = handleChunk(
@@ -293,7 +305,12 @@ export class DshClient extends EventEmitter {
           kind: aborted ? "error" : "exit",
           ts: Date.now(),
           seq: eventSeq++,
-          data: { exitCode, durationMs: Date.now() - start, aborted },
+          data: {
+            exitCode,
+            durationMs: Date.now() - start,
+            aborted,
+            ...(spawnErrorMessage ? { message: spawnErrorMessage } : {}),
+          },
         };
         queue.push(finalEvt);
         this.emit("event", finalEvt);
@@ -301,7 +318,17 @@ export class DshClient extends EventEmitter {
         resolveP();
       };
       proc.once("close", (code) => finish(code));
-      proc.once("error", () => finish(null));
+      proc.once("error", (err) => {
+        // A child that never started (ENOENT / EACCES / EBADF on spawn) must
+        // not be reported as a clean exit. `finish(null)` alone produced a
+        // terminal event with exitCode null and aborted false, so summarize()
+        // returned a result with no `error` field — and the cluster, the DAG
+        // executor, the result cache and MCP all key off `error`, so they
+        // cached and served a run that never happened.
+        aborted = true;
+        spawnErrorMessage = `failed to spawn dsh: ${err instanceof Error ? err.message : String(err)}`;
+        finish(null);
+      });
     });
 
     try {
@@ -312,7 +339,7 @@ export class DshClient extends EventEmitter {
       if (!closed) {
         aborted = true;
         killTree("SIGTERM");
-        forceKillTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+        scheduleForceKill();
       }
     }
   }
@@ -463,6 +490,12 @@ export function summarize(events: DshEvent[]): DshResult {
 
   // An aborted run is never a success, even when it produced a partial answer.
   if (aborted) {
+    // The reason matters: a timed-out run and a run that never spawned are
+    // both "aborted", and without the detail the caller cannot tell which.
+    const abortDetail = stderrTail
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .pop();
     return {
       answer,
       usage,
@@ -472,7 +505,10 @@ export function summarize(events: DshEvent[]): DshResult {
       durationMs,
       exitCode,
       stderrTail,
-      error: { message: "task aborted or timed out", code: "ABORTED" },
+      error: {
+        message: "task aborted or timed out" + (abortDetail ? ": " + abortDetail : ""),
+        code: "ABORTED",
+      },
     };
   }
 
