@@ -46,6 +46,27 @@ export function resolveDshModuleRoot(explicit?: string): string | null {
   const envRoot = process.env.DSH_MODULE_ROOT;
   if (envRoot && existsSync(join(envRoot, "package.json"))) return resolve(envRoot);
 
+  // The discovery walk below can shell out to `npm root -g` / `pnpm root -g`,
+  // which costs hundreds of milliseconds per call. Cluster construction (once
+  // per instance) and SDK self-description (once per AI turn) both call this,
+  // so memoize the result against everything that can change the answer.
+  const cacheKey = [
+    process.cwd(),
+    process.env.DSH_MODULE_ROOT ?? "",
+    process.env.APPDATA ?? "",
+    process.env.LOCALAPPDATA ?? "",
+    process.env.npm_execpath ?? "",
+  ].join("\u0000");
+  if (moduleRootMemo && moduleRootMemo.key === cacheKey) return moduleRootMemo.value;
+
+  const found = discoverDshModuleRoot();
+  moduleRootMemo = { key: cacheKey, value: found };
+  return found;
+}
+
+let moduleRootMemo: { key: string; value: string | null } | null = null;
+
+function discoverDshModuleRoot(): string | null {
   const tried: string[] = [];
 
   // 1. require.resolve from cwd
@@ -103,6 +124,8 @@ export function installDsh(): string | null {
   } catch {
     return null;
   }
+  // The package did not exist a moment ago; the memoized "not found" answer is stale.
+  moduleRootMemo = null;
   return resolveDshModuleRoot();
 }
 
@@ -133,13 +156,31 @@ function runPackageManager(manager: "npm" | "pnpm", args: string[]): void {
   });
 }
 
+const versionMemo = new Map<string, string>();
+
 function readVersion(moduleRoot: string): string {
+  const cached = versionMemo.get(moduleRoot);
+  if (cached !== undefined) return cached;
+  let version = "0.0.0";
   try {
     const pkg = JSON.parse(readFileSync(join(moduleRoot, "package.json"), "utf8"));
-    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+    version = typeof pkg.version === "string" ? pkg.version : "0.0.0";
   } catch {
-    return "0.0.0";
+    /* keep the default */
   }
+  versionMemo.set(moduleRoot, version);
+  return version;
+}
+
+/**
+ * Version of the installed DeepSeek Harness, or "unknown" when it cannot be
+ * resolved. Used as a cache/result fingerprint so that upgrading dsh
+ * invalidates previously memoized results.
+ */
+export function resolveDshVersion(explicitRoot?: string): string {
+  const moduleRoot = resolveDshModuleRoot(explicitRoot);
+  if (!moduleRoot) return "unknown";
+  return readVersion(moduleRoot);
 }
 
 export function ensureDshHome(explicit?: string, workspace?: string): string {

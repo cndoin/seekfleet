@@ -9,8 +9,9 @@ export { DshCluster, type DshClusterOptions } from "./dsh-cluster.js";
 export { SeekFleet, DshPlugin, type SeekFleetOptions, type DshPluginOptions } from "./harness-sdk.js";
 export { inspect, readDshManifest, SDK_CAPABILITIES } from "./discovery.js";
 export { dumpProfileConfig, profilePluginAction } from "./profiles.js";
-export { resolveDsh, resolveDshModuleRoot, ensureDshHome, type ResolvedDsh } from "./install.js";
-export { serveMcp, main as serveMcpMain, type ServeMcpOptions } from "./mcp-server.js";
+export { resolveDsh, resolveDshModuleRoot, resolveDshVersion, ensureDshHome, type ResolvedDsh } from "./install.js";
+export { packageVersion } from "./version.js";
+export { serveMcp, main as serveMcpMain, MCP_TOOL_NAMES, CHARACTER_LIMIT, type ServeMcpOptions } from "./mcp-server.js";
 export {
   startDashboardServer,
   type DashboardServerOptions,
@@ -75,6 +76,7 @@ export {
   type SessionRecord,
   type SessionStatus,
   type SessionCheckpoint,
+  type SessionStoreOptions,
 } from "./session.js";
 export { SessionManager, type SessionManagerOptions, type StartOptions } from "./session-manager.js";
 export {

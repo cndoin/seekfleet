@@ -18,7 +18,7 @@ import { DshClient } from "./dsh-client.js";
 import { CircuitBreaker } from "./circuit-breaker.js";
 import { ResultCache } from "./result-cache.js";
 import { CostTracker } from "./cost-tracker.js";
-import { resolveDshModuleRoot } from "./install.js";
+import { resolveDshModuleRoot, resolveDshVersion } from "./install.js";
 import { AdaptiveRouter } from "./adaptive-router.js";
 import { ROUTING_FNS } from "./routing.js";
 import { AutoScaler } from "./auto-scaler.js";
@@ -91,6 +91,9 @@ export class DshCluster extends EventEmitter {
   private readonly stopping = { v: false };
   private readonly healthTimer?: NodeJS.Timeout;
   private roundRobinCursor = 0;
+  /** Resolved once in the constructor; reused by every instance slot. */
+  private readonly resolvedModuleRoot: string;
+  private readonly dshVersion: string;
 
   // Phase 2+3 layers
   readonly router = new AdaptiveRouter();
@@ -124,6 +127,11 @@ export class DshCluster extends EventEmitter {
     } = opts;
     this.spec = rest;
     this.clientOpts = client ?? {};
+    // Resolve the runtime identity once. Both lookups can be expensive (module
+    // discovery may shell out to `npm root -g`) and addSlot() needs them per
+    // instance, so doing it here keeps cluster creation O(1) in subprocesses.
+    this.resolvedModuleRoot = resolveDshModuleRoot() ?? this.resolveDshHome();
+    this.dshVersion = resolveDshVersion();
     // Capabilities registry must be initialized after spec is set (needs dshHome).
     (this as { capabilities: CapabilityRegistry }).capabilities = new CapabilityRegistry(this.resolveDshHome());
     this.useCache = enableCache ?? !!cacheDir;
@@ -193,19 +201,8 @@ export class DshCluster extends EventEmitter {
       this.autoScaler.start();
     }
 
-    // Register capabilities for each instance
-    for (const inst of opts.instances) {
-      this.capabilities.publish({
-        label: inst.label,
-        profile: inst.profile ?? rest.profile ?? "headless",
-        dshVersion: "0.1.0-rc.6",
-        dshModuleRoot: resolveDshModuleRoot() ?? this.resolveDshHome(),
-        tools: [],
-        tags: inst.tags ?? [],
-        concurrency: inst.concurrency ?? 1,
-        ttlMs: 60000,
-      });
-    }
+    // addSlot() already published a capability record for every instance above;
+    // re-publishing here only duplicated the work.
   }
 
   /** Run a single task, routing through the cluster. Returns the result + instance label. */
@@ -222,7 +219,7 @@ export class DshCluster extends EventEmitter {
     const cacheContext = {
       cwd: t.cwd ?? this.spec.workspace,
       patches: t.patches,
-      dshVersion: "0.1.0-rc.6",
+      dshVersion: this.dshVersion,
     };
     this.metrics.inc("dsh_tasks_total");
 
@@ -244,7 +241,11 @@ export class DshCluster extends EventEmitter {
 
     // 2. Pick through the configured strategy.
     const pick = this.pick(t);
-    if (!pick.label) {
+    const slot = pick.label ? this.slots.get(pick.label) : undefined;
+    if (!pick.label || !slot) {
+      // A label can survive pick() yet be gone here when another in-flight task
+      // finished drainAndRemove() in between. Report it as an eligibility
+      // failure instead of crashing on an undefined slot.
       this.metrics.inc("dsh_route_failures_total");
       throw new Error(
         "dsh-cluster: no eligible instance for task (router score: " +
@@ -252,7 +253,6 @@ export class DshCluster extends EventEmitter {
           ")",
       );
     }
-    const slot = this.slots.get(pick.label)!;
     const estimatedCost = this.estimateTaskCost(t, profile);
     const reservationId = await this.cost.reserve(estimatedCost, t.label);
     if (reservationId === null) {
@@ -395,8 +395,8 @@ export class DshCluster extends EventEmitter {
       ? new ReplayRecorder({ task: t.task, instanceLabel: "stream", profile: t.profile ?? "" })
       : null;
     const pick = this.pick(t);
-    if (!pick.label) throw new Error("dsh-cluster: no eligible instance for stream");
-    const slot = this.slots.get(pick.label)!;
+    const slot = pick.label ? this.slots.get(pick.label) : undefined;
+    if (!pick.label || !slot) throw new Error("dsh-cluster: no eligible instance for stream");
     const profile = t.profile ?? this.spec.profile ?? "headless";
     const reservationId = await this.cost.reserve(this.estimateTaskCost(t, profile), t.label);
     if (reservationId === null) {
@@ -411,7 +411,13 @@ export class DshCluster extends EventEmitter {
     let usage: DshResult["usage"];
     try {
       for await (const evt of slot.client.stream(this.taskForSlot(slot, t))) {
-        if (evt.kind === "usage") usage = evt.data as DshResult["usage"];
+        // The classifier wraps the payload, so a usage line arrives as
+        // { usage: {...} }. Reading evt.data directly yielded undefined token
+        // counts and pushed NaN costs into the tracker.
+        if (evt.kind === "usage") {
+          const d = evt.data as { usage?: DshResult["usage"] } & Partial<NonNullable<DshResult["usage"]>>;
+          usage = d.usage ?? (typeof d.inputTokens === "number" ? (d as DshResult["usage"]) : undefined);
+        }
         if (evt.kind === "error") outcome = "err";
         if (evt.kind === "exit") {
           const data = evt.data as { exitCode?: number | null };
@@ -639,8 +645,8 @@ export class DshCluster extends EventEmitter {
     this.capabilities.publish({
       label: spec.label,
       profile: spec.profile ?? this.spec.profile ?? "headless",
-      dshVersion: "0.1.0-rc.6",
-      dshModuleRoot: resolveDshModuleRoot() ?? this.resolveDshHome(),
+      dshVersion: this.dshVersion,
+      dshModuleRoot: this.resolvedModuleRoot,
       tools: [],
       tags: spec.tags ?? [],
       concurrency: spec.concurrency ?? 1,
