@@ -75,4 +75,28 @@ describe("summarize terminal events", () => {
     // A plain error event with no abort payload is not an abort.
     expect(r.error).toBeUndefined();
   });
+
+  it("treats a run that never spawned as a failure", () => {
+    // What _stream() emits when spawn itself fails: the terminal event is
+    // marked aborted and carries the reason. Before the fix finish(null) put
+    // neither on the event, so this returned a result with no `error` field
+    // and every consumer (cluster, cache, MCP, breaker) read it as success.
+    const events: DshEvent[] = [
+      {
+        kind: "error",
+        ts: 1,
+        seq: 1,
+        data: { exitCode: null, durationMs: 12, aborted: true, message: "failed to spawn dsh: spawn ENOENT" },
+      },
+    ];
+    const r = summarize(events);
+    expect(r.error?.code).toBe("ABORTED");
+    expect(r.error?.message).toContain("ENOENT");
+  });
+
+  it("keeps the reason on an aborted run", () => {
+    const r = summarize([{ kind: "error", ts: 1, seq: 1, data: { exitCode: null, aborted: true, message: "boom" } }]);
+    // Callers need to distinguish a timeout from a run that never started.
+    expect(r.error?.message).toContain("boom");
+  });
 });
