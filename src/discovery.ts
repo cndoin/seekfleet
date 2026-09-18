@@ -163,7 +163,13 @@ export const SDK_CAPABILITIES: DshCapability[] = [
       required: ["instances"],
       properties: {
         profile: { type: "string" },
-        routing: { type: "string", enum: ["round-robin", "least-loaded", "tag", "random"] },
+        routing: {
+          type: "string",
+          // Must list every DshRoutingStrategy. Omitting "adaptive" made
+          // schema-validating harnesses (and the SDK users reading this
+          // capability) believe the documented strategy was unsupported.
+          enum: ["round-robin", "least-loaded", "tag", "random", "adaptive"],
+        },
         instances: {
           type: "array",
           items: {

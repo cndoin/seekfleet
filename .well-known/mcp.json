@@ -1,22 +1,22 @@
 {
   "schemaVersion": "1.0",
-  "name": "dsh-plugin-sdk",
-  "displayName": "DeepSeek Harness Plugin SDK",
-  "description": "AI-friendly plugin SDK for DeepSeek Harness. Single-instance, cluster, and MCP bridge for hermes/openclaw/Codex-style agent frameworks.",
-  "version": "0.1.0",
-  "homepage": "https://github.com/dsh-plugin-sdk/dsh-plugin-sdk",
+  "name": "seekfleet",
+  "displayName": "SeekFleet",
+  "description": "Cross-platform control plane for DeepSeek Harness (dsh) agent fleets. Exposes one-shot tasks, durable sessions, routed clusters, dependency DAGs, budgets and policies over MCP stdio for Claude, Codex, Cursor, Gemini, Hermes and OpenClaw style clients.",
+  "version": "0.1.1",
+  "homepage": "https://github.com/cndoin/seekfleet",
   "license": "MIT",
   "transport": {
     "type": "stdio",
     "command": "node",
     "args": [
-      "dist/bin/dsh-plugin.js",
+      "dist/bin/seekfleet.js",
       "serve-mcp"
     ]
   },
   "capabilities": {
     "tools": {
-      "listChanged": true
+      "listChanged": false
     }
   },
   "tools": [
@@ -24,13 +24,15 @@
       "name": "dsh_inspect",
       "annotations": {
         "readOnlyHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_run",
       "annotations": {
         "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -38,6 +40,7 @@
       "name": "dsh_run_stream",
       "annotations": {
         "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -45,26 +48,32 @@
       "name": "dsh_profile_dump",
       "annotations": {
         "readOnlyHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_profile_install",
       "annotations": {
         "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
     {
       "name": "dsh_cluster_create",
       "annotations": {
-        "idempotentHint": true
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_cluster_route",
       "annotations": {
         "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -72,24 +81,32 @@
       "name": "dsh_cluster_status",
       "annotations": {
         "readOnlyHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_cluster_scale",
-      "annotations": {}
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
     },
     {
       "name": "dsh_cluster_shutdown",
       "annotations": {
         "destructiveHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_dag_run",
       "annotations": {
         "destructiveHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       }
     },
@@ -97,14 +114,75 @@
       "name": "dsh_metrics",
       "annotations": {
         "readOnlyHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_create",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_start",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_status",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_events",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_cancel",
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_resume",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "dsh_session_result",
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
       "name": "dsh_capability_match",
       "annotations": {
         "readOnlyHint": true,
-        "idempotentHint": true
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     }
   ]
