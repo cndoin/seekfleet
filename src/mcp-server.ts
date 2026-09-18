@@ -21,11 +21,41 @@ import { dumpProfileConfig, profilePluginAction } from "./profiles.js";
 import { loadPolicy, PolicyEnforcer } from "./policy-enforcer.js";
 import { resolveDsh } from "./install.js";
 import { SessionManager } from "./session-manager.js";
+import { packageVersion } from "./version.js";
 import { startDashboardServer, type DashboardServerHandle, type DashboardSnapshot } from "./dashboard-server.js";
-import type { DshClusterSpec, DshEnvelope, DshInstanceSpec, DshTask } from "./types.js";
+import type { DshClusterSpec, DshEnvelope, DshInstanceSpec, DshResult, DshTask } from "./types.js";
 
 /** MCP 2025-11-25 recommended CHARACTER_LIMIT for tool output. */
 export const CHARACTER_LIMIT = 25_000;
+
+/**
+ * Canonical tool list. Kept next to the registrations so that the discovery
+ * manifest (.well-known/mcp.json) and the docs can be asserted against it —
+ * the manifest previously advertised 13 of the 20 tools and a binary path that
+ * did not exist, which silently broke harness auto-configuration.
+ */
+export const MCP_TOOL_NAMES = [
+  "dsh_inspect",
+  "dsh_run",
+  "dsh_run_stream",
+  "dsh_profile_dump",
+  "dsh_profile_install",
+  "dsh_cluster_create",
+  "dsh_cluster_route",
+  "dsh_cluster_status",
+  "dsh_cluster_scale",
+  "dsh_cluster_shutdown",
+  "dsh_dag_run",
+  "dsh_metrics",
+  "dsh_session_create",
+  "dsh_session_start",
+  "dsh_session_status",
+  "dsh_session_events",
+  "dsh_session_cancel",
+  "dsh_session_resume",
+  "dsh_session_result",
+  "dsh_capability_match",
+] as const;
 
 interface ClusterEntry {
   cluster: DshCluster;
@@ -68,6 +98,41 @@ function ok<T>(data: T): DshEnvelope<T> {
 }
 function err(code: string, message: string, details?: unknown): DshEnvelope<never> {
   return { ok: false, error: { code, message, details } };
+}
+
+/**
+ * Failure carried by a *resolved* DshResult, or undefined when the run
+ * succeeded. Task runners resolve with a failed result instead of throwing —
+ * `summarize()` reports a non-zero exit through `result.error`, and
+ * `cluster.route()` deliberately returns soft failures. An envelope that only
+ * looked for a thrown error therefore told the harness `ok: true` for a task
+ * that had actually crashed, which is what made the harness integrations
+ * unreliable.
+ */
+function taskFailure(result: DshResult | undefined): { code: string; message: string } | undefined {
+  if (!result) return undefined;
+  if (result.error) return { code: result.error.code ?? "RUN_FAILED", message: result.error.message };
+  if (typeof result.exitCode === "number" && result.exitCode !== 0) {
+    return { code: "EXIT_NONZERO", message: "dsh exited with code " + result.exitCode };
+  }
+  return undefined;
+}
+
+/** Same check as taskFailure, but read off a collected DshEvent stream. */
+function streamFailure(events: unknown[]): { code: string; message: string } | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i] as {
+      kind?: string;
+      data?: { exitCode?: number | null; aborted?: boolean; message?: string };
+    };
+    if (e?.kind !== "exit" && e?.kind !== "error") continue;
+    if (e.data?.aborted === true) return { code: "ABORTED", message: "task aborted or timed out" };
+    if (typeof e.data?.exitCode === "number" && e.data.exitCode !== 0) {
+      return { code: "EXIT_NONZERO", message: "dsh exited with code " + e.data.exitCode };
+    }
+    return undefined; // the latest terminal event reports success
+  }
+  return undefined;
 }
 
 /** Render an envelope as a truncated text block. */
@@ -139,7 +204,7 @@ export interface ServeMcpOptions {
 
 export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
   const server = new McpServer(
-    { name: "seekfleet-mcp-server", version: "0.1.0" },
+    { name: "seekfleet-mcp-server", version: packageVersion() },
     {
       capabilities: { tools: {} },
       instructions:
@@ -199,6 +264,8 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
     async (args) => {
       try {
         const result = await getClient().run(toTask(args));
+        const failure = taskFailure(result);
+        if (failure) return toMcpResult(err(failure.code, failure.message, { result })) as never;
         return toMcpResult(ok({ result, instance: "shared" })) as never;
       } catch (e) {
         return toMcpResult(err("RUN_FAILED", e instanceof Error ? e.message : String(e))) as never;
@@ -214,7 +281,8 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
       description:
         "Run a task and yield each DshEvent (log, tool_call, tool_result, answer, exit) " +
         "as it arrives. Returns the full event sequence in one response. For very long " +
-        "tasks, consider polling via dsh_session_continue instead.",
+        "tasks, create a durable session (dsh_session_create) and poll it with " +
+        "dsh_session_events instead.",
       inputSchema: {
         task: z.string().min(1),
         profile: z.string().optional(),
@@ -226,15 +294,18 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
       const events: unknown[] = [];
       try {
         for await (const evt of getClient().stream(toTask(args))) events.push(evt);
+        // A stream that ends on a non-zero exit does not throw, so the terminal
+        // event has to be inspected or a crashed run looks like a clean one.
+        const failure = streamFailure(events);
+        if (failure) return toMcpResult(err(failure.code, failure.message, { events })) as never;
         return toMcpResult(ok({ events })) as never;
       } catch (e) {
-        events.push({
-          kind: "error",
-          ts: Date.now(),
-          seq: -1,
-          data: { message: e instanceof Error ? e.message : String(e) },
-        });
-        return toMcpResult(ok({ events })) as never;
+        // The documented contract is {ok, data?, error?} so callers can branch.
+        // Reporting ok:true here made a failed stream indistinguishable from a
+        // successful one; the collected events are preserved under details.
+        const message = e instanceof Error ? e.message : String(e);
+        events.push({ kind: "error", ts: Date.now(), seq: -1, data: { message } });
+        return toMcpResult(err("RUN_STREAM_FAILED", message, { events })) as never;
       }
     },
   );
@@ -560,6 +631,13 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
           abortOnFailure: args.abortOnFailure,
           maxDependencyChars: args.maxDependencyChars,
         });
+        // A DAG whose nodes all failed would otherwise be reported as ok:true
+        // with an empty answer list, hiding the failure from the harness.
+        if (result.failed.length > 0 || result.aborted) {
+          return toMcpResult(
+            err("DAG_NODE_FAILED", result.failed.length + " node(s) failed", { dag: result }),
+          ) as never;
+        }
         return toMcpResult(ok(result)) as never;
       } catch (e2) {
         return toMcpResult(err("DAG_FAILED", e2 instanceof Error ? e2.message : String(e2))) as never;

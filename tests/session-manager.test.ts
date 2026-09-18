@@ -131,4 +131,32 @@ describe("SessionManager", () => {
     expect(list[0]?.runId).toBe(b.runId);
     expect(list[1]?.runId).toBe(a.runId);
   });
+
+  it("marks a session failed when the runner resolves with a failed result", async () => {
+    // summarize() reports a crashed dsh run through result.error instead of
+    // throwing, so a runner that resolves is not proof of success. Marking it
+    // "succeeded" told every polling harness the crashed run was done.
+    const failing = new SessionManager({
+      dshHome: dir,
+      runner: async () =>
+        ({
+          answer: "",
+          toolCalls: [],
+          toolResults: [],
+          events: 2,
+          durationMs: 5,
+          exitCode: 1,
+          stderrTail: "dsh: MISSING_CREDENTIAL: no API key",
+          error: { message: "dsh exited with code 1", code: "EXIT_NONZERO" },
+        }) as DshResult,
+    });
+    const r = failing.create({ task: "boom" });
+    await failing.start(r.runId);
+    await waitFor(r.runId, "failed");
+    const snap = failing.status(r.runId);
+    expect(snap?.status).toBe("failed");
+    // The error must be observable through result() so polling clients see it.
+    const { error } = failing.result(r.runId);
+    expect(error?.code).toBe("EXIT_NONZERO");
+  });
 });

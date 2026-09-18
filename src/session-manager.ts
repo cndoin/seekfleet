@@ -146,6 +146,11 @@ export class SessionManager {
         onEvent: (evt) => this.enqueueEvent(runId, evt),
       });
       finalResult = result;
+      // A runner may *resolve* with a failed result: summarize() reports a
+      // non-zero exit / timeout through `result.error` rather than throwing.
+      // Marking every resolved run as "succeeded" told every polling harness
+      // that a crashed background session had completed successfully.
+      if (result.error) finalError = result.error;
       if (result.usage) {
         cost.record({
           instanceLabel: runId,
@@ -159,15 +164,16 @@ export class SessionManager {
         });
       }
       // Record a checkpoint with the final cost summary
+      const settled: SessionStatus = abort.signal.aborted ? "cancelled" : result.error ? "failed" : "succeeded";
       const ckpt: SessionCheckpoint = {
         ts: Date.now(),
         costUsd: cost.totalCost(),
         inputTokens: cost.totalTokens().input,
         outputTokens: cost.totalTokens().output,
-        metadata: { status: "succeeded" },
+        metadata: { status: settled, ...(result.error ? { error: result.error.message } : {}) },
       };
       this.store.addCheckpoint(runId, ckpt);
-      outcome = abort.signal.aborted ? "cancelled" : "succeeded";
+      outcome = settled;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       finalError = { message };

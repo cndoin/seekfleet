@@ -148,6 +148,30 @@ export class DagExecutor {
             }
             const { result, instance, cached } = await this.runner(task);
             const nodeEnd = Date.now();
+            // A runner is allowed to *resolve* with a failed result: the cluster
+            // route() path returns the result instead of throwing. Keying the
+            // node status off "did the promise resolve" therefore marked every
+            // non-zero exit — missing credentials, crashed tool, killed child —
+            // as a successful node with an empty answer.
+            const failure = describeResultFailure(result);
+            if (failure) {
+              nodeResults.set(node.id, {
+                id: node.id,
+                status: "failed",
+                startedAt: nodeStart,
+                finishedAt: nodeEnd,
+                durationMs: nodeEnd - nodeStart,
+                result,
+                error: failure,
+                dependencies: node.dependsOn ?? [],
+                instance,
+                cached,
+              });
+              pending.delete(node.id);
+              if (node.critical !== false) failed.push(node.id);
+              if (abortOnFailure && node.critical !== false) throw new Error(failure);
+              return;
+            }
             const r: DagNodeResult = {
               id: node.id,
               status: "ok",
@@ -164,18 +188,23 @@ export class DagExecutor {
             if (cached) cacheHits.push(node.id);
           } catch (e) {
             const nodeEnd = Date.now();
-            const r: DagNodeResult = {
-              id: node.id,
-              status: "failed",
-              startedAt: nodeStart,
-              finishedAt: nodeEnd,
-              durationMs: nodeEnd - nodeStart,
-              error: e instanceof Error ? e.message : String(e),
-              dependencies: node.dependsOn ?? [],
-            };
-            nodeResults.set(node.id, r);
-            pending.delete(node.id);
-            if (node.critical !== false) failed.push(node.id);
+            // A failure the branch above already recorded in full (it keeps the
+            // DshResult for diagnostics) must not be clobbered by the generic
+            // handler — only the abort propagation is still needed.
+            if (!nodeResults.has(node.id)) {
+              const r: DagNodeResult = {
+                id: node.id,
+                status: "failed",
+                startedAt: nodeStart,
+                finishedAt: nodeEnd,
+                durationMs: nodeEnd - nodeStart,
+                error: e instanceof Error ? e.message : String(e),
+                dependencies: node.dependsOn ?? [],
+              };
+              nodeResults.set(node.id, r);
+              pending.delete(node.id);
+              if (node.critical !== false) failed.push(node.id);
+            }
             if (abortOnFailure && node.critical !== false) throw e;
           }
         }),
@@ -189,6 +218,27 @@ export class DagExecutor {
     }
 
     const finishedAt = Date.now();
+
+    // Anything still pending when the DAG aborts never ran. Recording those as
+    // skipped keeps the node list accountable: an aborted 5-node DAG used to
+    // return a node list containing only the first failure, so a caller could
+    // not tell the difference between "finished" and "stopped early".
+    if (aborted) {
+      for (const id of pending) {
+        const node = byId.get(id)!;
+        nodeResults.set(id, {
+          id,
+          status: "skipped",
+          startedAt: finishedAt,
+          finishedAt,
+          durationMs: 0,
+          error: "dag aborted before this node ran",
+          dependencies: node.dependsOn ?? [],
+        });
+      }
+      pending.clear();
+    }
+
     return {
       startedAt,
       finishedAt,
@@ -200,6 +250,22 @@ export class DagExecutor {
       aborted,
     };
   }
+}
+
+/**
+ * Failure carried by a resolved DshResult, or undefined when the run succeeded.
+ *
+ * `route()` deliberately resolves with a "soft" failure rather than rejecting,
+ * so any consumer that only watches for a thrown error will silently treat the
+ * failure as a success.
+ */
+function describeResultFailure(result: DshResult | undefined): string | undefined {
+  if (!result) return undefined;
+  if (result.error?.message) return result.error.message;
+  if (typeof result.exitCode === "number" && result.exitCode !== 0) {
+    return "dsh exited with code " + result.exitCode;
+  }
+  return undefined;
 }
 
 function buildDependencyContext(

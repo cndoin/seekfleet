@@ -139,7 +139,9 @@ export class DshClient extends EventEmitter {
   async run(task: DshTask): Promise<DshResult> {
     const validated = this.policy ? this.policy.assert(task) : task;
     const events: DshEvent[] = [];
-    for await (const evt of this.stream(validated)) events.push(evt);
+    // Apply the policy exactly once: go straight to _stream instead of calling
+    // stream(), which would run the policy gate a second time.
+    for await (const evt of this._stream(validated)) events.push(evt);
     return summarize(events);
   }
 
@@ -340,6 +342,10 @@ export class DshClient extends EventEmitter {
     const profile = task.profile ?? this.defaultProfile;
     const cliArgs: string[] = ["--profile", profile];
     for (const p of task.patches ?? []) cliArgs.push("--patch", p);
+    // A task prompt that starts with "-" would be parsed as a flag by the dsh
+    // argument parser. Insert the POSIX end-of-options marker only in that case,
+    // so the ordinary path keeps the exact argv it has always sent.
+    if (task.task.startsWith("-")) cliArgs.push("--");
     cliArgs.push(task.task);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -438,22 +444,27 @@ export function summarize(events: DshEvent[]): DshResult {
     } else if (e.kind === "stderr") {
       const d = e.data as { line?: string };
       if (typeof d.line === "string") stderrLines.push(d.line);
-    } else if (e.kind === "exit") {
-      const d = e.data as { exitCode: number | null; durationMs: number; aborted: boolean };
-      exitCode = d.exitCode;
-      durationMs = d.durationMs;
-      aborted = d.aborted;
-    } else if (e.kind === "error") {
-      const d = e.data as { message?: string };
+    } else if (e.kind === "exit" || e.kind === "error") {
+      // The stream emits a terminal event of kind "exit" on a clean close and
+      // kind "error" when the task was aborted / timed out / killed. Both carry
+      // the same payload, so both must update exitCode / durationMs / aborted.
+      // Regression guard: treating only "exit" as terminal made every aborted
+      // task look like a success (exitCode null, durationMs 0, no error field),
+      // which then poisoned the cluster cache, the breaker and the budget.
+      const d = e.data as { exitCode?: number | null; durationMs?: number; aborted?: boolean; message?: string };
       if (typeof d.message === "string") stderrLines.push("[error] " + d.message);
+      if (d.exitCode !== undefined) exitCode = d.exitCode;
+      if (typeof d.durationMs === "number") durationMs = d.durationMs;
+      if (d.aborted === true) aborted = true;
     }
   }
 
   const stderrTail = stderrLines.slice(-20).join("\n");
 
-  if (aborted && !answer) {
+  // An aborted run is never a success, even when it produced a partial answer.
+  if (aborted) {
     return {
-      answer: "",
+      answer,
       usage,
       toolCalls,
       toolResults,
@@ -462,6 +473,33 @@ export function summarize(events: DshEvent[]): DshResult {
       exitCode,
       stderrTail,
       error: { message: "task aborted or timed out", code: "ABORTED" },
+    };
+  }
+
+  // A non-zero exit code is a failure, full stop. dsh reports hard errors
+  // (missing credentials, invalid flags, crashed tool) this way and still
+  // prints nothing on stdout, so without this branch a harness received
+  // `{ answer: "", exitCode: 1 }` with no `error` field and — because the
+  // cluster, the DAG executor, the result cache and MCP all key off `error` —
+  // treated the run as a success and cached the empty answer.
+  if (typeof exitCode === "number" && exitCode !== 0) {
+    const detail = stderrTail
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .pop();
+    return {
+      answer,
+      usage,
+      toolCalls,
+      toolResults,
+      events: events.length,
+      durationMs,
+      exitCode,
+      stderrTail,
+      error: {
+        message: "dsh exited with code " + exitCode + (detail ? ": " + detail : ""),
+        code: "EXIT_NONZERO",
+      },
     };
   }
 
