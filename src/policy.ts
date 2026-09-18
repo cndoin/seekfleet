@@ -38,6 +38,15 @@ export interface ValidationResult {
   errors: string[];
   pendingApprovals: string[];
   sanitizedEnv: Record<string, string>;
+  /**
+   * True when `sanitizedEnv` is the authoritative environment for this request.
+   *
+   * An empty `sanitizedEnv` is ambiguous on its own: it means "no env vars were
+   * supplied" OR "the policy stripped all of them". Callers that fall back to
+   * the original env whenever the sanitized map is empty therefore resurrect
+   * variables the policy removed. Use this flag to tell the two apart.
+   */
+  envSanitized: boolean;
   resolvedCwd: string;
   resolvedPatches: string[];
   resolvedProfile: string | undefined;
@@ -137,6 +146,7 @@ export function validate(policy: Policy, ctx: ValidationContext): ValidationResu
     errors,
     pendingApprovals,
     sanitizedEnv,
+    envSanitized: ctx.env !== undefined,
     resolvedCwd,
     resolvedPatches,
     resolvedProfile,

@@ -79,7 +79,10 @@ export class PolicyEnforcer {
       cwd: r.resolvedCwd || task.cwd,
       patches: r.resolvedPatches.length > 0 ? r.resolvedPatches : task.patches,
       profile: r.resolvedProfile ?? task.profile,
-      env: Object.keys(r.sanitizedEnv).length > 0 ? r.sanitizedEnv : task.env,
+      // When the caller supplied env vars, the sanitized map is authoritative
+      // even if it is empty — otherwise a policy that strips every variable
+      // would be silently bypassed by falling back to the original env.
+      env: r.envSanitized ? r.sanitizedEnv : task.env,
     };
   }
 
