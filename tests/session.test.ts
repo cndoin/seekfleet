@@ -26,10 +26,39 @@ describe("SessionStore", () => {
 
   it("appends events with cap", () => {
     const s = store.create({ task: "x" });
+    const startedAt = Date.now();
     for (let i = 0; i < 1500; i++) store.appendEvent(s.runId, evt(i, "log"));
+    const elapsedMs = Date.now() - startedAt;
     const loaded = store.load(s.runId);
     expect(loaded?.events.length).toBe(1000);
     expect(loaded?.lastSeq).toBe(1499);
+    // Each append used to be a full read-parse-write-with-fsync of the record,
+    // making a 1500-event burst quadratic and blocking (it exceeded a 30s test
+    // timeout). Assert a bound so a regression fails immediately with a useful
+    // message instead of hanging.
+    expect(elapsedMs).toBeLessThan(5000);
+  });
+
+  it("flushes coalesced appends to disk on demand", () => {
+    const s = store.create({ task: "flush" });
+    store.appendEvent(s.runId, evt(1, "log"));
+    store.appendEvent(s.runId, evt(2, "log"));
+    // A different store has no in-memory view, so it proves the bytes landed.
+    expect(new SessionStore(dir).load(s.runId)?.events.length ?? 0).toBe(0);
+    store.flush();
+    const reloaded = new SessionStore(dir).load(s.runId);
+    expect(reloaded?.events.length).toBe(2);
+    expect(reloaded?.lastSeq).toBe(2);
+  });
+
+  it("persists lifecycle changes synchronously", () => {
+    const s = store.create({ task: "x" });
+    store.setStatus(s.runId, "running");
+    store.addCheckpoint(s.runId, { ts: Date.now(), costUsd: 0.02, inputTokens: 1, outputTokens: 2 });
+    // No explicit flush: status and checkpoints must be durable immediately.
+    const reloaded = new SessionStore(dir).load(s.runId);
+    expect(reloaded?.status).toBe("running");
+    expect(reloaded?.checkpoints.length).toBe(1);
   });
 
   it("transitions status", () => {

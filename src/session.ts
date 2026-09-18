@@ -59,12 +59,36 @@ export interface SessionRecord {
 
 export const MAX_EVENTS_PER_SESSION = 1000;
 
+/**
+ * Write coalescing window for high-frequency event appends.
+ *
+ * Every append used to be a full read-parse-write-plus-fsync of the whole
+ * record, so streaming N events cost O(N^2) bytes of disk I/O and blocked the
+ * event loop (1500 appends took >30s on Windows). Appends are now accumulated
+ * in memory and flushed at most once per window; lifecycle changes
+ * (create / setStatus / addCheckpoint) still write synchronously so crash
+ * recovery always sees a consistent status.
+ */
+const DEFAULT_FLUSH_DELAY_MS = 50;
+
+export interface SessionStoreOptions {
+  /** Coalescing window in ms for appendEvents. 0 writes synchronously. */
+  flushDelayMs?: number;
+}
+
 export class SessionStore {
   private readonly dir: string;
+  /** Authoritative in-process copy; avoids re-reading the file on every call. */
+  private readonly cache = new Map<string, SessionRecord>();
+  /** Records whose in-memory state is newer than what is on disk. */
+  private readonly dirty = new Set<string>();
+  private flushTimer?: NodeJS.Timeout;
+  private readonly flushDelayMs: number;
 
-  constructor(dshHome: string) {
+  constructor(dshHome: string, opts: SessionStoreOptions = {}) {
     this.dir = join(dshHome, "sessions");
     mkdirSync(this.dir, { recursive: true });
+    this.flushDelayMs = opts.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS;
   }
 
   private pathFor(runId: string): string {
@@ -93,20 +117,87 @@ export class SessionStore {
   }
 
   load(runId: string): SessionRecord | null {
+    let path: string;
     try {
-      const path = this.pathFor(runId);
+      path = this.pathFor(runId);
+    } catch {
+      return null;
+    }
+    const cached = this.cache.get(runId);
+    if (cached) return cached;
+    try {
       if (!existsSync(path)) return null;
-      return JSON.parse(readFileSync(path, "utf8")) as SessionRecord;
+      const rec = JSON.parse(readFileSync(path, "utf8")) as SessionRecord;
+      this.cache.set(runId, rec);
+      return rec;
     } catch {
       return null;
     }
   }
 
+  /** Persist a record durably right now (atomic replace + fsync). */
   save(rec: SessionRecord): void {
-    writeFileAtomicSync(this.pathFor(rec.runId), JSON.stringify(rec, null, 2));
+    this.dirty.delete(rec.runId);
+    this.cache.set(rec.runId, rec);
+    writeFileAtomicSync(this.pathFor(rec.runId), JSON.stringify(rec));
   }
 
-  patch(runId: string, patch: (rec: SessionRecord) => SessionRecord): SessionRecord | null {
+  /** Persist a record, letting the coalescing window absorb bursts. */
+  private saveDeferred(rec: SessionRecord): void {
+    this.cache.set(rec.runId, rec);
+    this.dirty.add(rec.runId);
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer !== undefined || this.dirty.size === 0) return;
+    if (this.flushDelayMs <= 0) {
+      this.flushDirty();
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flushDirty();
+    }, this.flushDelayMs);
+    // A pending flush must never keep the host process alive.
+    timer.unref?.();
+    this.flushTimer = timer;
+  }
+
+  /** Write every pending record immediately. Safe to call at any time. */
+  flush(): void {
+    this.flushDirty();
+  }
+
+  private flushDirty(): void {
+    if (this.flushTimer !== undefined) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.dirty.size === 0) return;
+    // If the directory vanished (test teardown, manual cleanup) there is nothing
+    // meaningful to persist, and recreating it would resurrect deleted state.
+    if (!existsSync(this.dir)) {
+      this.dirty.clear();
+      return;
+    }
+    for (const runId of Array.from(this.dirty)) {
+      this.dirty.delete(runId);
+      const rec = this.cache.get(runId);
+      if (!rec) continue;
+      try {
+        writeFileAtomicSync(this.pathFor(runId), JSON.stringify(rec));
+      } catch {
+        /* best effort: the next append re-schedules the write */
+      }
+    }
+  }
+
+  private patchInternal(
+    runId: string,
+    patch: (rec: SessionRecord) => SessionRecord,
+    deferred: boolean,
+  ): SessionRecord | null {
     let path: string;
     try {
       path = this.pathFor(runId);
@@ -118,9 +209,14 @@ export class SessionStore {
       if (!rec) return null;
       const updated = patch({ ...rec });
       updated.updatedAt = Date.now();
-      this.save(updated);
+      if (deferred) this.saveDeferred(updated);
+      else this.save(updated);
       return updated;
     });
+  }
+
+  patch(runId: string, patch: (rec: SessionRecord) => SessionRecord): SessionRecord | null {
+    return this.patchInternal(runId, patch, false);
   }
 
   /** Append an event to the session. Bounded by MAX_EVENTS_PER_SESSION (FIFO drop). */
@@ -131,16 +227,20 @@ export class SessionStore {
   /** Append a batch with one atomic file replacement. */
   appendEvents(runId: string, events: DshEvent[]): SessionRecord | null {
     if (events.length === 0) return this.load(runId);
-    return this.patch(runId, (rec) => {
-      rec.events.push(...events);
-      if (rec.events.length > MAX_EVENTS_PER_SESSION) {
-        rec.events.splice(0, rec.events.length - MAX_EVENTS_PER_SESSION);
-      }
-      for (const evt of events) {
-        if (typeof evt.seq === "number" && evt.seq > rec.lastSeq) rec.lastSeq = evt.seq;
-      }
-      return rec;
-    });
+    return this.patchInternal(
+      runId,
+      (rec) => {
+        rec.events.push(...events);
+        if (rec.events.length > MAX_EVENTS_PER_SESSION) {
+          rec.events.splice(0, rec.events.length - MAX_EVENTS_PER_SESSION);
+        }
+        for (const evt of events) {
+          if (typeof evt.seq === "number" && evt.seq > rec.lastSeq) rec.lastSeq = evt.seq;
+        }
+        return rec;
+      },
+      true,
+    );
   }
 
   /** Update status atomically. */
@@ -166,14 +266,22 @@ export class SessionStore {
 
   /** List all sessions (most recent first). */
   list(): SessionRecord[] {
+    // Flush first so the on-disk view matches the in-memory view.
+    this.flushDirty();
     if (!existsSync(this.dir)) return [];
-    // readdirSync imported at top
     const out: SessionRecord[] = [];
     for (const entry of readdirSync(this.dir)) {
       if (!entry.endsWith(".json")) continue;
+      const runId = entry.slice(0, -".json".length);
+      // Live records win over the file; unknown records are parsed but not
+      // cached, so listing thousands of sessions cannot grow memory.
+      const cached = this.cache.get(runId);
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
       try {
-        const rec = JSON.parse(readFileSync(join(this.dir, entry), "utf8")) as SessionRecord;
-        out.push(rec);
+        out.push(JSON.parse(readFileSync(join(this.dir, entry), "utf8")) as SessionRecord);
       } catch {
         /* skip */
       }
@@ -190,6 +298,8 @@ export class SessionStore {
   delete(runId: string): void {
     try {
       const path = this.pathFor(runId);
+      this.cache.delete(runId);
+      this.dirty.delete(runId);
       withFileLockSync(path + ".lock", () => {
         try {
           unlinkSync(path);
