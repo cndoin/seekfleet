@@ -67,4 +67,48 @@ describe("codex-config", () => {
     const r = codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"] });
     expect(["added", "updated", "noop"]).toContain(r.action);
   });
+
+  it("round-trips the disabled flag through status", () => {
+    codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"], disabled: true });
+    const text = readFileSync(cfgPath, "utf8");
+    expect(text).toContain("disabled = true");
+    // A literal /disabled\\s*=\\s*true/ regex can never match a real line, so
+    // status used to report disabled:false for a disabled server.
+    const s = codexStatus({ codexHome: home });
+    expect(s.installed).toBe(true);
+    expect(s.disabled).toBe(true);
+  });
+
+  it("reports enabled servers as not disabled", () => {
+    codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"] });
+    expect(codexStatus({ codexHome: home }).disabled).toBe(false);
+  });
+
+  it("does not attribute another server's disabled flag to ours", () => {
+    codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"] });
+    writeFileSync(cfgPath, readFileSync(cfgPath, "utf8") + "\n[mcp_servers.other]\ndisabled = true\n", "utf8");
+    const s = codexStatus({ codexHome: home });
+    expect(s.installed).toBe(true);
+    expect(s.disabled).toBe(false);
+    expect(s.block).not.toContain("mcp_servers.other");
+  });
+
+  it("refuses to write a block with no launch command", () => {
+    const before = process.env.DSH_PLUGIN_CLI;
+    delete process.env.DSH_PLUGIN_CLI;
+    try {
+      expect(() => codexInstall({ codexHome: home })).toThrow(/no MCP server command resolved/);
+      expect(existsSync(cfgPath)).toBe(false);
+    } finally {
+      if (before !== undefined) process.env.DSH_PLUGIN_CLI = before;
+    }
+  });
+
+  it("leaves the file untouched on a noop install", () => {
+    codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"] });
+    const first = readFileSync(cfgPath, "utf8");
+    const r = codexInstall({ codexHome: home, serverCommand: "/x", serverArgs: ["serve-mcp"] });
+    expect(r.action).toBe("noop");
+    expect(readFileSync(cfgPath, "utf8")).toBe(first);
+  });
 });

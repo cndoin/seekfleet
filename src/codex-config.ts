@@ -45,6 +45,22 @@ function defaultServerCommand(): string {
   return process.env.DSH_PLUGIN_CLI || "";
 }
 
+/**
+ * Resolve the executable Codex must launch. A blank command produces a
+ * syntactically valid but unusable TOML block, so fail loudly instead: a silent
+ * `command = ""` leaves Codex with an MCP server that can never start.
+ */
+function resolveServerCommand(opts: CodexInstallOptions): string {
+  const command = opts.serverCommand || defaultServerCommand();
+  if (command.length === 0) {
+    throw new Error(
+      "codex-config: no MCP server command resolved. Pass serverCommand (the seekfleet CLI does this " +
+        "automatically) or set DSH_PLUGIN_CLI to the absolute path of the SeekFleet entry script.",
+    );
+  }
+  return command;
+}
+
 function configPath(codexHome: string): string {
   return join(codexHome, "config.toml");
 }
@@ -55,7 +71,7 @@ function ensureCodexHome(codexHome: string): void {
 
 /** Build the [mcp_servers.<name>] TOML block as a string. */
 function renderBlock(opts: CodexInstallOptions, serverName: string): string {
-  const command = opts.serverCommand || defaultServerCommand();
+  const command = resolveServerCommand(opts);
   const args = opts.serverArgs ?? ["serve-mcp"];
   const lines: string[] = [];
   lines.push("");
@@ -119,7 +135,6 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Read the existing config and return previous [mcp_servers.<name>].disabled if any. */
 /** Validate that the merged TOML parses cleanly. Returns the error string or null. */
 function validateToml(text: string, source: string): string | null {
   try {
@@ -129,12 +144,36 @@ function validateToml(text: string, source: string): string | null {
     return "generated TOML does not parse (" + source + "): " + (e instanceof Error ? e.message : String(e));
   }
 }
+/**
+ * Extract the text belonging to `[mcp_servers.<name>]`, including nested
+ * subsections such as `[mcp_servers.<name>.env]`, and stopping at the first
+ * unrelated table header. Scoping the search this way prevents a `disabled`
+ * key belonging to a *different* MCP server from being attributed to ours.
+ */
+function extractBlock(text: string, serverName: string): { block: string; found: boolean } {
+  const ownedRe = new RegExp("^\\[mcp_servers\\." + escapeRegex(serverName) + "(?:\\.|\\])");
+  const lines = text.split("\n");
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (ownedRe.test(lines[i]!)) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return { block: "", found: false };
+  const out: string[] = [lines[start]!];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^\[[^\]]+\]/.test(line) && !ownedRe.test(line)) break;
+    out.push(line);
+  }
+  return { block: out.join("\n"), found: true };
+}
+
 function readExistingDisabled(text: string, serverName: string): boolean | undefined {
-  const re = new RegExp(
-    "^\\[mcp_servers\\." + escapeRegex(serverName) + "\\][\\\\s\\\\S]*?disabled\\s*=\\s*(true|false)",
-    "m",
-  );
-  const m = text.match(re);
+  const { block, found } = extractBlock(text, serverName);
+  if (!found) return undefined;
+  const m = block.match(/^[ \t]*disabled[ \t]*=[ \t]*(true|false)/m);
   if (!m) return undefined;
   return m[1] === "true";
 }
@@ -174,7 +213,8 @@ export function codexInstall(opts: CodexInstallOptions = {}): CodexInstallResult
   }
 
   // atomic write: temp + rename so a crash mid-write never corrupts the config
-  writeFileAtomicSync(cfgPath, merged);
+  // A noop rewrite would only churn the mtime and wake file watchers.
+  if (action !== "noop") writeFileAtomicSync(cfgPath, merged);
 
   return {
     configPath: cfgPath,
@@ -213,6 +253,7 @@ export function codexUninstall(opts: { codexHome?: string; serverName?: string }
   return { configPath: cfgPath, serverName, action: "updated", previousDisabled: prevDisabled };
 }
 
+/** Read the existing config and report our MCP block, if present. */
 export function codexStatus(opts: { codexHome?: string; serverName?: string } = {}): {
   configPath: string;
   installed: boolean;
@@ -224,25 +265,10 @@ export function codexStatus(opts: { codexHome?: string; serverName?: string } = 
   const serverName = opts.serverName || "seekfleet";
   if (!existsSync(cfgPath)) return { configPath: cfgPath, installed: false };
   const text = readFileSync(cfgPath, "utf8");
-  const headerRe = new RegExp("^\\[mcp_servers\\." + escapeRegex(serverName) + "\\]", "m");
-  const headerMatch = headerRe.exec(text);
-  if (!headerMatch) return { configPath: cfgPath, installed: false };
-  const start = headerMatch.index;
-  const after = text.slice(start);
-  // Walk lines; stop at first foreign header.
-  const allLines = after.split("\n");
-  const blockLines: string[] = [];
-  for (let k = 0; k < allLines.length; k++) {
-    const l = allLines[k]!;
-    if (
-      k > 0 &&
-      /^\[[^\]]+\]/.test(l) &&
-      !new RegExp("^\\[mcp_servers\\." + escapeRegex(serverName) + "(\\.|$)").test(l)
-    )
-      break;
-    blockLines.push(l);
-  }
-  const block = blockLines.join("\n");
-  const disabled = /disabled\\s*=\\s*true/.test(block);
-  return { configPath: cfgPath, installed: true, disabled, block };
+  const { block, found } = extractBlock(text, serverName);
+  if (!found) return { configPath: cfgPath, installed: false };
+  // Reuse the same scoped parser as install/uninstall. The previous inline
+  // regex used a literal `/disabled\\s*=\\s*true/`, which can never match a
+  // real "disabled = true" line, so status always reported disabled: false.
+  return { configPath: cfgPath, installed: true, disabled: readExistingDisabled(text, serverName) ?? false, block };
 }
