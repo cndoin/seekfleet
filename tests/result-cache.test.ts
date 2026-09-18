@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ResultCache } from "../src/result-cache.js";
@@ -89,5 +89,61 @@ describe("ResultCache", () => {
     });
     expect(cache.invalidateProfile("headless")).toBe(1);
     expect(cache.get({ task: "x" }, "headless")).toBeNull();
+  });
+
+  it("clears the persistent log, not only memory", () => {
+    const result: DshResult = {
+      answer: "y",
+      toolCalls: [],
+      toolResults: [],
+      events: 1,
+      durationMs: 1,
+      exitCode: 0,
+      stderrTail: "",
+    };
+    cache.set({ task: "x" }, "headless", result);
+    cache.clear();
+    // The log is replayed on startup, so an in-memory-only clear used to
+    // resurrect every cleared entry in the next process.
+    const restarted = new ResultCache({ cacheDir: dir, defaultTtlMs: 60000 });
+    expect(restarted.stats().size).toBe(0);
+    expect(restarted.get({ task: "x" }, "headless")).toBeNull();
+  });
+
+  it("persists invalidation across a restart", () => {
+    const result: DshResult = {
+      answer: "y",
+      toolCalls: [],
+      toolResults: [],
+      events: 1,
+      durationMs: 1,
+      exitCode: 0,
+      stderrTail: "",
+    };
+    for (let i = 0; i < 100; i++) cache.set({ task: "t" + i }, "headless", result);
+    expect(cache.invalidateProfile("headless")).toBe(100);
+    const restarted = new ResultCache({ cacheDir: dir, defaultTtlMs: 60000 });
+    expect(restarted.stats().size).toBe(0);
+  });
+
+  it("bounds the append-only log instead of growing forever", () => {
+    const result: DshResult = {
+      answer: "y",
+      toolCalls: [],
+      toolResults: [],
+      events: 1,
+      durationMs: 1,
+      exitCode: 0,
+      stderrTail: "",
+    };
+    // Repeatedly fill and invalidate: without compaction the file would keep
+    // every historical line and never shrink.
+    for (let round = 0; round < 5; round++) {
+      for (let i = 0; i < 100; i++) cache.set({ task: `r${round}-${i}` }, "headless", result);
+      cache.invalidateProfile("headless");
+    }
+    const raw = readFileSync(join(dir, "results.jsonl"), "utf8");
+    const lines = raw.split("\n").filter((l) => l.length > 0);
+    expect(lines.length).toBeLessThanOrEqual(100);
   });
 });

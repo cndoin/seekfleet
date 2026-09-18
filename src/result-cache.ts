@@ -10,7 +10,14 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomicSync } from "./atomic-file.js";
 import type { DshResult, DshTask } from "./types.js";
+
+/**
+ * Never compact files smaller than this many lines: the rewrite costs more than
+ * the space it reclaims. Above it, the log is bounded relative to live entries.
+ */
+const MIN_LINES_BEFORE_COMPACT = 512;
 
 export interface CacheEntry {
   key: string;
@@ -96,6 +103,10 @@ export class ResultCache {
   /** P1-7: single-flight: in-flight fetches deduped across concurrent calls. */
   private inFlight = new Map<string, Promise<{ entry: CacheEntry; ageMs: number } | null>>();
   private loaded = false;
+  /** Lines currently present in the append-only JSONL file. */
+  private appendedLines = 0;
+  /** True when an entry was dropped in memory but may still occupy a line. */
+  private removedSinceCompact = false;
   stats_ = { hits: 0, misses: 0, writes: 0, evictions: 0 };
 
   constructor(opts: CacheOptions) {
@@ -114,6 +125,7 @@ export class ResultCache {
       const lines = readFileSync(this.cacheFile, "utf8")
         .split("\n")
         .filter((l) => l.length > 0);
+      this.appendedLines = lines.length;
       for (const line of lines) {
         try {
           const entry = JSON.parse(line) as CacheEntry;
@@ -130,9 +142,32 @@ export class ResultCache {
   private persistEntry(entry: CacheEntry): void {
     try {
       appendFileSync(this.cacheFile, JSON.stringify(entry) + "\n", "utf8");
+      this.appendedLines++;
+      this.maybeCompact();
     } catch {
       /* best-effort */
     }
+  }
+
+  /** Rewrite the log with only the live entries. */
+  private compact(): void {
+    const lines = Array.from(this.entries.values()).map((e) => JSON.stringify(e));
+    writeFileAtomicSync(this.cacheFile, lines.length > 0 ? lines.join("\n") + "\n" : "");
+    this.appendedLines = lines.length;
+    this.removedSinceCompact = false;
+  }
+
+  /**
+   * The store is an append-only JSONL log, so without compaction it grows
+   * forever and dropped entries keep coming back after a restart. Rewrite when
+   * the file is either far larger than the live set, or dominated by garbage
+   * left behind by expiry / invalidation / eviction.
+   */
+  private maybeCompact(): void {
+    const live = this.entries.size;
+    const growthLimit = Math.max(MIN_LINES_BEFORE_COMPACT, live * 4);
+    const hasGarbage = this.removedSinceCompact && this.appendedLines >= Math.max(live * 2, 64);
+    if (this.appendedLines > growthLimit || hasGarbage) this.compact();
   }
 
   private evictExpired(now: number): void {
@@ -144,6 +179,10 @@ export class ResultCache {
       }
     }
     this.stats_.evictions += evicted;
+    if (evicted > 0) {
+      this.removedSinceCompact = true;
+      this.maybeCompact();
+    }
   }
 
   private evictOldestIfFull(): void {
@@ -159,6 +198,8 @@ export class ResultCache {
     if (oldestKey) {
       this.entries.delete(oldestKey);
       this.stats_.evictions++;
+      this.removedSinceCompact = true;
+      this.maybeCompact();
     }
   }
 
@@ -263,6 +304,10 @@ export class ResultCache {
       }
     }
     this.stats_.evictions += count;
+    if (count > 0) {
+      this.removedSinceCompact = true;
+      this.maybeCompact();
+    }
     return count;
   }
 
@@ -303,9 +348,11 @@ export class ResultCache {
     // 3. We are the leader - compute and cache
     const p = (async () => {
       const result = await compute();
-      this.set(task, profile, result, undefined, extras);
-      const fresh = this.entries.get(key)!;
-      return { entry: fresh, ageMs: 0 };
+      // Use the entry returned by set() directly. Re-reading it from the map
+      // assumed the just-inserted entry survived eviction, and a `!` assertion
+      // turned a small maxEntries into a downstream TypeError.
+      const entry = this.set(task, profile, result, undefined, extras);
+      return { entry, ageMs: 0 };
     })() as Promise<{ entry: CacheEntry; ageMs: number }>;
     this.inFlight.set(key, p);
     try {
@@ -326,14 +373,26 @@ export class ResultCache {
       }
     }
     this.stats_.evictions += count;
+    if (count > 0) {
+      this.removedSinceCompact = true;
+      this.maybeCompact();
+    }
     return count;
   }
 
-  /** Clear everything. */
+  /**
+   * Clear everything, in memory and on disk. The disk rewrite is what makes the
+   * clear stick: the log is replayed on the next process start, so dropping
+   * only the in-memory map used to resurrect every cleared entry.
+   */
   clear(): void {
+    // Load first: loading after clearing would replay the log straight back
+    // into the (now empty) map and undo the clear.
+    this.ensureLoaded();
     const size = this.entries.size;
     this.entries.clear();
     this.stats_.evictions += size;
+    if (size > 0 || this.appendedLines > 0) this.compact();
   }
 
   stats(): CacheStats {
