@@ -21,6 +21,7 @@ import { loadPolicy, savePolicy, PolicyEnforcer } from "../src/policy-enforcer.j
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { installSeekFleetSkill, type SkillInstallTarget, type SkillInstallScope } from "../src/skill-installer.js";
+import { packageVersion } from "../src/version.js";
 
 function makePlugin() {
   // PART-2: load policy from $DSH_HOME/policy.json at startup
@@ -35,7 +36,7 @@ function makePlugin() {
 
 async function main() {
   const program = new Command();
-  program.name("seekfleet").description("Control plane for DeepSeek Harness agent fleets").version("0.1.0");
+  program.name("seekfleet").description("Control plane for DeepSeek Harness agent fleets").version(packageVersion());
 
   program
     .command("inspect")
@@ -80,7 +81,11 @@ async function main() {
         timeoutMs: opts.timeout,
       });
       if (opts.json) console.log(JSON.stringify(result, null, 2));
-      else console.log(result.answer || "(no answer)");
+      else if (result.error) {
+        console.error("seekfleet: run failed [" + (result.error.code ?? "ERROR") + "]: " + result.error.message);
+      } else console.log(result.answer || "(no answer)");
+      // A failed run must not exit 0: scripts and harness wrappers branch on it.
+      if (result.error) process.exitCode = 1;
     });
 
   const cluster = program.command("cluster").description("multi-instance cluster operations");
@@ -207,7 +212,10 @@ async function main() {
       }
       console.log(JSON.stringify(result, null, 2));
       if (opts.persist) {
-        const resolved = resolveDsh({ dshHome: result.workspace });
+        // The registry lives under DSH_HOME. Passing the *workspace* here (as an
+        // earlier version did) pointed the lookup at a directory that never
+        // holds clusters.json, so --persist silently never updated anything.
+        const resolved = resolveDsh({});
         const entry = getEntry(resolved.dshHome, opts.id);
         if (entry) {
           entry.spec = { ...entry.spec, profile: opts.profile ?? entry.spec.profile };
@@ -344,19 +352,28 @@ async function main() {
     .option("--concurrency <n>", "parallel workers", (v: string) => parseInt(v, 10), 4)
     .option("--no-abort-on-failure", "continue after a critical node fails")
     .action(async (opts) => {
-      const plugin = new SeekFleet({});
+      // Clusters only exist in-process, so the DAG must run against a cluster
+      // rebuilt from the persisted registry. A bare `new SeekFleet()` owns no
+      // clusters at all and always failed with "cluster not found".
       const nodes = JSON.parse(opts.nodes);
-      const r = await plugin.clusterDagRun(opts.id, {
-        nodes,
-        concurrency: opts.concurrency,
-        abortOnFailure: opts.abortOnFailure,
-      });
+      const r = await runWithPersistedCluster(opts.id, async (cluster) =>
+        cluster.runDag({
+          nodes,
+          concurrency: opts.concurrency,
+          abortOnFailure: opts.abortOnFailure,
+        }),
+      );
+      if (!r) {
+        console.error("cluster not found (and not persisted):", opts.id);
+        process.exit(1);
+      }
       console.log(
         JSON.stringify(
           {
             order: r.order,
             cacheHits: r.cacheHits,
             failed: r.failed,
+            aborted: r.aborted,
             durationMs: r.durationMs,
             nodes: r.nodes.map(
               (n: {
@@ -364,14 +381,23 @@ async function main() {
                 status: string;
                 instance?: string;
                 cached?: boolean;
+                error?: string;
                 result?: { answer?: string };
-              }) => ({ id: n.id, status: n.status, instance: n.instance, cached: n.cached, answer: n.result?.answer }),
+              }) => ({
+                id: n.id,
+                status: n.status,
+                instance: n.instance,
+                cached: n.cached,
+                error: n.error,
+                answer: n.result?.answer,
+              }),
             ),
           },
           null,
           2,
         ),
       );
+      if (r.failed.length > 0 || r.aborted) process.exitCode = 1;
     });
 
   program
