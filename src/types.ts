@@ -6,6 +6,7 @@
 import type { RoleSpec, RoleViolation } from "./role-spec.js";
 import type { VerifyReport, VerifyRule } from "./verifier.js";
 import type { FailureAttribution } from "./mast.js";
+import type { RepairOutcome, RepairPolicyInput } from "./repair.js";
 
 export type DshEventKind =
   "stdout" | "stderr" | "log" | "tool_call" | "tool_result" | "subagent" | "usage" | "answer" | "exit" | "error";
@@ -82,6 +83,16 @@ export interface DshTask {
   thinkingTokenBudget?: number;
   /** 工作量档位。上层据此决定并行度，避免简单问题开出几十个子 agent。 */
   effort?: "low" | "medium" | "high";
+  /**
+   * 自纠错策略：验收不过时带证据重来一轮，而不是直接失败。
+   *
+   * 简写：`true` = 最多 2 次追加尝试、只修契约违约与验证失败；
+   * 数字 = 追加尝试次数；对象 = 完整策略。默认关闭。
+   *
+   * 注意：自纠错生效的前提是**有客观判据**（role 或 verify 至少配一项）。
+   * 两者都没配时写了这个字段也不会重试 —— 没有证据的重试只是把成本乘以 N。
+   */
+  selfRepair?: RepairPolicyInput;
 }
 
 /** 任务执行后的审计附加信息。全部可选，不写不代表通过，只代表没装设检测。 */
@@ -103,6 +114,8 @@ export interface DshTaskAudit {
   };
   /** MAST 归因。仅在检出失败信号时出现；成功运行不生成。 */
   attribution?: FailureAttribution;
+  /** 自纠错过程。仅当任务开启了 selfRepair 且至少有一轮失败时出现。 */
+  repair?: RepairOutcome;
 }
 
 export interface DshInstanceSpec {
@@ -215,6 +228,8 @@ export interface DagNodeSpec {
   /** 节点级独立验证规则。 */
   verify?: VerifyRule[];
   effort?: "low" | "medium" | "high";
+  /** 节点级自纠错策略。同一个 DAG 里，能自愈的节点和必须一次做对的节点往往不同。 */
+  selfRepair?: RepairPolicyInput;
 }
 
 export interface DagSpec {

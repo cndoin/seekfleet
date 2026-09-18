@@ -9,6 +9,7 @@ import type { DshResult, DshTask } from "./types.js";
 import type { RoleSpec } from "./role-spec.js";
 import type { VerifyRule } from "./verifier.js";
 import type { FailureAttribution } from "./mast.js";
+import type { RepairPolicyInput } from "./repair.js";
 
 export interface DagNode {
   id: string;
@@ -27,6 +28,11 @@ export interface DagNode {
   /** 节点级独立验证规则，节点跑完后由框架执行。 */
   verify?: VerifyRule[];
   effort?: "low" | "medium" | "high";
+  /**
+   * 节点级自纠错策略。同一张图里，允许自愈的节点和必须一次做对的节点往往不同：
+   * 探索性子任务值得重试，已经写了文件的关键步骤不值得。
+   */
+  selfRepair?: RepairPolicyInput;
 }
 
 export interface DagSpec {
@@ -167,6 +173,7 @@ export class DagExecutor {
                     role: node.role,
                     verify: node.verify,
                     effort: node.effort,
+                    selfRepair: node.selfRepair,
                     ...(spec.defaults ?? {}),
                   }
                 : ({ ...spec.defaults, ...node.task, id: undefined } as DshTask);

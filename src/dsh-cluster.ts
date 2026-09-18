@@ -38,6 +38,14 @@ import {
   type RoleSpec,
 } from "./role-spec.js";
 import { verifyResult } from "./verifier.js";
+import {
+  RepairLoop,
+  buildRepairTask,
+  normalizeRepairPolicy,
+  observeResult,
+  summarizeRepair,
+  type RepairVerdict,
+} from "./repair.js";
 import { aggregateFailures, classifyTrace, type FailureAttribution, type MastReport, type TraceView } from "./mast.js";
 import type {
   DshClusterSpec,
@@ -287,18 +295,19 @@ export class DshCluster extends EventEmitter {
       this.metrics.inc("dsh_cache_misses_total");
     }
 
-    // 2. Pick through the configured strategy.
-    const pick = this.pick(t);
-    const slot = pick.label ? this.slots.get(pick.label) : undefined;
-    if (!pick.label || !slot) {
-      // A label can survive pick() yet be gone here when another in-flight task
-      // finished drainAndRemove() in between. Report it as an eligibility
-      // failure instead of crashing on an undefined slot.
+    // 2. 先确认集群里确实有活着的实例。
+    //
+    // 这里**刻意不调用 pick()**：pick 是有状态的（round-robin 的 cursor 会前进、
+    // adaptive 会更新评分）。为了「预先确认有没有实例」多调一次，会白白吃掉一个
+    // 调度位置，让真正执行的那一轮偏离预期 —— 本轮改动里真实踩到过一次，
+    // 表现是 round-robin 集群连叫两次却总落在同一个实例上。
+    const alive = Array.from(this.slots.values()).filter((s) => s.state !== "stopped");
+    if (alive.length === 0) {
       this.metrics.inc("dsh_route_failures_total");
       throw new Error(
-        "dsh-cluster: no eligible instance for task (router score: " +
-          JSON.stringify(pick.scores.map((s) => ({ label: s.label, eligible: s.eligible, reason: s.reason }))) +
-          ")",
+        "dsh-cluster: no eligible instance for task (cluster has " +
+          this.slots.size +
+          " instance(s), none in a runnable state)",
       );
     }
     const estimatedCost = this.estimateTaskCost(t, profile);
@@ -339,69 +348,68 @@ export class DshCluster extends EventEmitter {
       void flightPromise.catch(() => undefined);
       this.taskFlights.set(flightKey, flightPromise);
     }
-    slot.inFlight++;
-    slot.state = "busy";
-    slot.lastActivityTs = Date.now();
     const start = Date.now();
     let outcome: "ok" | "err" = "ok";
     let result: DshResult | null = null;
     let errorMsg: string | undefined;
+    let lastInstance = alive[0]!.spec.label;
     try {
-      if (this.useBreaker && slot.breaker) {
-        try {
-          const br = await slot.breaker.exec(this.taskForSlot(slot, t));
-          result = br.result;
-        } catch (err) {
-          if (err instanceof DshResultFailure) result = err.result;
-          else throw err;
+      // —— 自纠错闭环 ——
+      // 验证层能告诉你这一轮没做成，但它不改变结果。这个循环才是「自纠错」：
+      // 带着客观证据让模型再来一轮，而不是把失败直接丢给调用方。
+      const repairPolicy = normalizeRepairPolicy(t.selfRepair);
+      const loop = new RepairLoop(repairPolicy);
+      const skippedLabels = new Set<string>();
+      let attemptTask: DshTask = t;
+      let verdict: RepairVerdict = { action: "proceed", reason: "ok", nextAttempt: 0, message: "首次尝试" };
+
+      while (verdict.action === "proceed") {
+        const attemptNo = loop.history.length;
+        const attempt = await this.executeAttempt({ task: attemptTask, profile, role, attemptNo, skippedLabels });
+        result = attempt.result;
+        lastInstance = attempt.instance;
+        const observation = observeResult(result, attemptNo);
+        verdict = loop.observe(observation);
+        if (verdict.action === "proceed") {
+          // 轮换实例：重试卡在同一个坏实例上的概率远高于「随机的运气不好」。
+          if (repairPolicy.rotateInstance) skippedLabels.add(attempt.instance);
+          attemptTask = buildRepairTask(t, observation, verdict.nextAttempt);
         }
-        this.router.recordBreaker(pick.label, slot.breaker.stats());
-      } else {
-        result = await slot.client.run(this.taskForSlot(slot, t));
       }
-      slot.totalRun++;
-      // —— 组织层：契约审计 + 独立验证 + 失败归因 ——
-      // 这一步把「退出码干净」和「任务真的做成了」区分开。没有这一层，
-      // 一个越权改了文件但什么都没完成的 run 会被当成成功并写进缓存。
-      const governed = await this.applyGovernance(t, role, result);
-      result = governed.result;
-      if (result.error || (result.exitCode !== null && result.exitCode !== 0)) {
-        slot.totalErrors++;
+      if (!result) throw new Error("dsh-cluster: task produced no result");
+
+      // 任务的结局只认最后一轮。中间几轮不论好坏，都不代表这次调用的结果。
+      const failedNow = result.error !== undefined || (result.exitCode !== null && result.exitCode !== 0);
+      if (failedNow) {
         outcome = "err";
-        if (result.error?.message) slot.lastError = result.error.message;
         errorMsg = result.error?.message ?? "exit " + result.exitCode;
       }
-      if (result.usage) {
-        this.cost.record({
-          instanceLabel: pick.label,
-          profile,
-          model: result.usage.model ?? "default",
-          inputTokens: result.usage.inputTokens,
-          outputTokens: result.usage.outputTokens,
-          durationMs: result.durationMs,
-          ts: Date.now(),
-          taskPreview: t.task.slice(0, 80),
-        });
-        this.router.recordCost(
-          pick.label,
-          this.cost.estimateCost(result.usage.model ?? "default", result.usage.inputTokens, result.usage.outputTokens),
-          result.usage.totalTokens,
-        );
+
+      // 归因按「任务」计数：每个 route() 只进一个样本。若把每轮修复都算进去，
+      // failureRate 会被自纠错本身抬高，看起来像系统变坏了。
+      let audit: DshTaskAudit = result.audit ?? {};
+      const attribution = this.attribute(t, role, result, audit);
+      if (attribution.signals.length > 0) audit = { ...audit, attribution };
+      if (repairPolicy.enabled) audit = { ...audit, repair: summarizeRepair(loop, verdict, !failedNow) };
+      if (Object.keys(audit).length > 0) result = { ...result, audit };
+
+      if (loop.history.length > 1) {
+        this.metrics.inc(failedNow ? "dsh_repair_exhausted_total" : "dsh_repair_rescued_total");
       }
-      // 3. Cache successful results
-      if (this.cache && outcome === "ok" && result) {
+
+      // 3. Cache successful results。失败（含自纠错耗尽）一律不进缓存：
+      //    一个坏答案被后续调用当作真值，是所有 bug 里最难查的一类。
+      if (this.cache && outcome === "ok") {
         this.cache.set(t, profile, result, undefined, cacheContext);
       }
-      this.emit("task_done", { instance: pick.label, task: { label: t.label, tags: t.tags }, result });
-      const routed = { ...result, instance: pick.label };
+      this.emit("task_done", { instance: lastInstance, task: { label: t.label, tags: t.tags }, result });
+      const routed = { ...result, instance: lastInstance };
       resolveFlight?.(routed);
       return routed;
     } catch (err) {
-      slot.totalErrors++;
       outcome = "err";
       errorMsg = err instanceof Error ? err.message : String(err);
-      slot.lastError = errorMsg;
-      this.emit("task_error", { instance: pick.label, error: errorMsg });
+      this.emit("task_error", { instance: lastInstance, error: errorMsg });
       rejectFlight?.(err);
       throw err;
     } finally {
@@ -413,22 +421,128 @@ export class DshCluster extends EventEmitter {
           this.cost.release(reservationId);
         }
       }
-      const slot2 = this.slots.get(pick.label);
-      if (slot2) slot2.inFlight--;
-      if (slot2) {
-        if (slot2.removeWhenIdle && slot2.inFlight === 0) this.finalizeRemoval(slot2.spec.label);
-        else slot2.state = slot2.inFlight > 0 ? "busy" : "ready";
-        slot2.lastActivityTs = Date.now();
-      }
       const dur = Date.now() - start;
-      this.router.recordResult(pick.label, outcome === "ok", dur, errorMsg);
-      this.metrics.inc(outcome === "ok" ? "dsh_tasks_succeeded_total" : "dsh_tasks_failed_total", {
-        instance: pick.label,
-      });
-      this.metrics.observe("dsh_task_duration_ms", dur, { instance: pick.label });
+      this.metrics.observe("dsh_task_duration_ms", dur, { instance: lastInstance, phase: "total" });
       if (flightKey && flightPromise && this.taskFlights.get(flightKey) === flightPromise) {
         this.taskFlights.delete(flightKey);
       }
+    }
+  }
+
+  /**
+   * 执行一次尝试（首次运行或自纠错重试）并完成组织层闸门判定。
+   *
+   * 重试轮和首次走**完全同一条路径**：同样的断路器、同样的角色契约、同样的独立
+   * 验证。这条不能打折 —— 一旦重试可以绕过治理，自纠错就变成了作弊通道
+   * （「第一次不合格，第二次放行」），验收层也就名存实亡了。
+   *
+   * 每一轮独立记账：in-flight 计数、断路器统计、路由评分、token 成本都要落到
+   * 它实际发生的那一次上，否则这一层的数据会比上层更假。
+   */
+  private async executeAttempt(args: {
+    task: DshTask;
+    profile: string;
+    role?: RoleSpec;
+    attemptNo: number;
+    skippedLabels: ReadonlySet<string>;
+  }): Promise<{ result: DshResult; instance: string }> {
+    const { task: attemptTask, profile, attemptNo, skippedLabels } = args;
+    const pick = this.pick(attemptTask, skippedLabels);
+    const label = pick.label;
+    const slot = label ? this.slots.get(label) : undefined;
+    if (!label || !slot) {
+      // pick() 给的 label 可能在到达这里之前被别的任务 drainAndRemove() 掉。
+      // 报成路由失败，而不是在一个空 slot 上崩掉。
+      this.metrics.inc("dsh_route_failures_total");
+      throw new Error(
+        "dsh-cluster: no eligible instance for attempt " +
+          attemptNo +
+          " (router score: " +
+          JSON.stringify(pick.scores.map((s) => ({ label: s.label, eligible: s.eligible, reason: s.reason }))) +
+          ")",
+      );
+    }
+
+    // 自纠错轮有自己的预算闸门：首次那一份 reservation 覆盖不了额外这几轮的花费。
+    let extraReservation: string | null = null;
+    if (attemptNo > 0) {
+      extraReservation = await this.cost.reserve(this.estimateTaskCost(attemptTask, profile), attemptTask.label);
+      if (extraReservation === null) {
+        this.metrics.inc("dsh_budget_rejections_total");
+        throw new Error("dsh-cluster: hard budget exceeded before repair attempt " + attemptNo);
+      }
+    }
+
+    slot.inFlight++;
+    slot.state = "busy";
+    slot.lastActivityTs = Date.now();
+    const startedAt = Date.now();
+    let ok = true;
+    let raw: DshResult | undefined;
+    let errMessage: string | undefined;
+    try {
+      if (this.useBreaker && slot.breaker) {
+        try {
+          const br = await slot.breaker.exec(this.taskForSlot(slot, attemptTask));
+          raw = br.result;
+        } catch (err) {
+          if (err instanceof DshResultFailure) raw = err.result;
+          else throw err;
+        }
+        this.router.recordBreaker(label, slot.breaker.stats());
+      } else {
+        raw = await slot.client.run(this.taskForSlot(slot, attemptTask));
+      }
+      slot.totalRun++;
+      // 中间轮不写归因缓冲，由 route() 在最终结果上统一记一次。
+      const governed = await this.applyGovernance(attemptTask, args.role, raw, { recordAttribution: false });
+      raw = governed.result;
+      if (raw.error) {
+        ok = false;
+        errMessage = raw.error.message;
+        slot.totalErrors++;
+        slot.lastError = errMessage;
+      }
+      if (raw.usage) {
+        this.cost.record({
+          instanceLabel: label,
+          profile,
+          model: raw.usage.model ?? "default",
+          inputTokens: raw.usage.inputTokens,
+          outputTokens: raw.usage.outputTokens,
+          durationMs: raw.durationMs,
+          ts: Date.now(),
+          taskPreview: attemptTask.task.slice(0, 80),
+        });
+        this.router.recordCost(
+          label,
+          this.cost.estimateCost(raw.usage.model ?? "default", raw.usage.inputTokens, raw.usage.outputTokens),
+          raw.usage.totalTokens,
+        );
+      }
+      return { result: raw, instance: label };
+    } catch (err) {
+      ok = false;
+      errMessage = err instanceof Error ? err.message : String(err);
+      slot.totalErrors++;
+      slot.lastError = errMessage;
+      throw err;
+    } finally {
+      // 额外 reservation 直接 confirm：跑到这一步钱已经花了（哪怕是跑挂了）。
+      if (extraReservation) this.cost.confirm(extraReservation);
+      // 用 re-get 而不是闭包里的 slot：并发om removal 可能已经把它踢出去。
+      const current = this.slots.get(label);
+      if (current) {
+        current.inFlight--;
+        if (current.removeWhenIdle && current.inFlight === 0) this.finalizeRemoval(current.spec.label);
+        else current.state = current.inFlight > 0 ? "busy" : "ready";
+        current.lastActivityTs = Date.now();
+      }
+      const dur = Date.now() - startedAt;
+      this.router.recordResult(label, ok, dur, errMessage);
+      const attemptLabel = { instance: label, attempt: String(attemptNo) };
+      this.metrics.inc(ok ? "dsh_tasks_succeeded_total" : "dsh_tasks_failed_total", attemptLabel);
+      this.metrics.observe("dsh_task_duration_ms", dur, attemptLabel);
     }
   }
 
@@ -467,6 +581,7 @@ export class DshCluster extends EventEmitter {
     t: DshTask,
     role: RoleSpec | undefined,
     raw: DshResult,
+    opts: { recordAttribution?: boolean } = {},
   ): Promise<{ result: DshResult; ok: boolean }> {
     const audit: DshTaskAudit = {};
     let roleAudit: RoleAudit | undefined;
@@ -544,6 +659,9 @@ export class DshCluster extends EventEmitter {
     }
 
     const ok = result.error === undefined;
+    // 自纠错的多轮尝试由 route() 在最终结果上记一次归因；单轮调用（本方法被直接
+    // 使用时）就在这里记。无论走哪条路，「一个任务一个样本」这条不能破。
+    if (opts.recordAttribution === false) return { result, ok };
     const attribution = this.attribute(t, role, result, audit);
     if (attribution.signals.length > 0) result = { ...result, audit: { ...(result.audit ?? audit), attribution } };
     return { result, ok };
@@ -686,14 +804,39 @@ export class DshCluster extends EventEmitter {
     }
   }
 
-  /** Pick an instance for a task. P0-2: respects spec.routing (round-robin/least-loaded/tag/random use ROUTING_FNS, "adaptive" uses AdaptiveRouter scoring). */
-  pick(task: DshTask): {
+  /**
+   * Pick an instance for a task.
+   *
+   * P0-2: respects spec.routing (round-robin/least-loaded/tag/random use ROUTING_FNS,
+   * "adaptive" uses AdaptiveRouter scoring).
+   *
+   * `exclude` 用于自纠错轮换实例：重试时避开上一次失败的实例。若排除后无人可选，
+   * 会**退回全集**而不是报错 —— 轮换是优化，不能让任务因为轮换而无处可去。
+   */
+  pick(
+    task: DshTask,
+    exclude?: ReadonlySet<string>,
+  ): {
+    label: string | null;
+    scores: Array<{ label: string; score: number; eligible: boolean; reason?: string }>;
+  } {
+    const doPick = (skip: ReadonlySet<string> | undefined) => this.pickWith(task, skip);
+    const tried = doPick(exclude);
+    if (tried.label || !exclude || exclude.size === 0) return tried;
+    return doPick(undefined);
+  }
+
+  private pickWith(
+    task: DshTask,
+    exclude: ReadonlySet<string> | undefined,
+  ): {
     label: string | null;
     scores: Array<{ label: string; score: number; eligible: boolean; reason?: string }>;
   } {
     if (this.stopping.v) return { label: null, scores: [] };
+    const eligibleSlots = (s: InstanceSlot) => s.state !== "stopped" && !(exclude?.has(s.spec.label) ?? false);
     const statusList = Array.from(this.slots.values())
-      .filter((s) => s.state !== "stopped")
+      .filter(eligibleSlots)
       .map((s) => this.toStatus(s));
     const instances = statusList.map((s) => ({ ...s, spec: this.slots.get(s.label)!.spec }));
     const strategy = (this.spec.routing ?? "least-loaded") as string;
