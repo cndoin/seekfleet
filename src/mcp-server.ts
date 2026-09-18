@@ -34,6 +34,7 @@ import { aggregateFailures, classifyTrace, formatAttribution, MAST_BASELINE, typ
 import type { DshClusterSpec, DshEnvelope, DshInstanceSpec, DshResult, DshTask } from "./types.js";
 import type { RoleSpec } from "./role-spec.js";
 import type { VerifyRule } from "./verifier.js";
+import type { RepairPolicy, RepairPolicyInput } from "./repair.js";
 
 /** MCP 2025-11-25 recommended CHARACTER_LIMIT for tool output. */
 export const CHARACTER_LIMIT = 25_000;
@@ -88,6 +89,28 @@ const VERIFY_DESCRIPTION =
   "任务结束后由框架独立执行的校验规则列表。模型自评不可靠，这一层才是验收。kind 取值: " +
   "command(argv 数组) | answer-schema | answer-match | answer-not-match | answer-min-length | " +
   "file-exists | max-tool-calls | tool-not-used。未知 kind 会被明确判失败，不会静默跳过。";
+
+const SELF_REPAIR_DESCRIPTION =
+  "验收不过时带证据重来一轮，而不是直接失败。" +
+  "true = 最多 2 次追加尝试且只修契约违约/验证失败；数字 = 追加尝试次数(上限 5)；" +
+  "对象可设 mode(off/governed/all) / maxAttempts / maxTokenGrowth / rotateInstance。" +
+  "生效前提是本任务配了 role 或 verify —— 没有客观判据时不会重试，" +
+  "因为那只是把成本乘以 N 而不改变结果。";
+
+/** 三个下线入口共用的 selfRepair 形状。 */
+const SELF_REPAIR_SCHEMA = z
+  .union([
+    z.boolean(),
+    z.number().int().positive().max(5),
+    z.object({
+      mode: z.enum(["off", "governed", "all"]).optional(),
+      maxAttempts: z.number().int().positive().max(5).optional(),
+      maxTokenGrowth: z.number().positive().optional(),
+      rotateInstance: z.boolean().optional(),
+    }),
+  ])
+  .optional()
+  .describe(SELF_REPAIR_DESCRIPTION);
 
 interface ClusterEntry {
   cluster: DshCluster;
@@ -300,6 +323,7 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
         verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
         thinkingTokenBudget: z.number().int().positive().optional().describe("思考 token 预算；超出只记录不禁行"),
         effort: z.enum(["low", "medium", "high"]).optional().describe("工作量档位，用于上层决定并行度"),
+        selfRepair: SELF_REPAIR_SCHEMA,
       },
       annotations: {
         readOnlyHint: false,
@@ -513,6 +537,7 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
         verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
         thinkingTokenBudget: z.number().int().positive().optional(),
         effort: z.enum(["low", "medium", "high"]).optional(),
+        selfRepair: SELF_REPAIR_SCHEMA,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -670,6 +695,7 @@ export async function serveMcp(opts: ServeMcpOptions = {}): Promise<void> {
                 .describe(ROLE_DESCRIPTION),
               verify: z.array(z.record(z.unknown())).optional().describe(VERIFY_DESCRIPTION),
               effort: z.enum(["low", "medium", "high"]).optional(),
+              selfRepair: SELF_REPAIR_SCHEMA,
             }),
           )
           .min(1),
@@ -1148,11 +1174,37 @@ function toTask(args: Record<string, unknown>): DshTask {
     verify: Array.isArray(args.verify) ? (args.verify as VerifyRule[]) : undefined,
     thinkingTokenBudget: typeof args.thinkingTokenBudget === "number" ? args.thinkingTokenBudget : undefined,
     effort: isEffort(args.effort) ? args.effort : undefined,
+    selfRepair: toSelfRepair(args.selfRepair),
   };
 }
 
 function isEffort(v: unknown): v is DshTask["effort"] {
   return v === "low" || v === "medium" || v === "high";
+}
+
+/**
+ * 窄化自纠错参数。
+ *
+ * 只接受 boolean / number / 带已知键的对象。认不出来时返回 undefined（= 关闭），
+ * 而不是把原对象塞进去 —— 悄悄启用自纠错会让一次调用的成本翻几倍，
+ * 而调用方完全不知道发生过重试。
+ */
+function toSelfRepair(v: unknown): RepairPolicyInput {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+  if (typeof v !== "object" || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const out: Partial<RepairPolicy> = {};
+  if (o.mode === "off" || o.mode === "governed" || o.mode === "all") out.mode = o.mode;
+  if (typeof o.maxAttempts === "number" && Number.isFinite(o.maxAttempts) && o.maxAttempts > 0) {
+    out.maxAttempts = Math.floor(o.maxAttempts);
+  }
+  if (typeof o.maxTokenGrowth === "number" && Number.isFinite(o.maxTokenGrowth) && o.maxTokenGrowth > 0) {
+    out.maxTokenGrowth = o.maxTokenGrowth;
+  }
+  if (typeof o.rotateInstance === "boolean") out.rotateInstance = o.rotateInstance;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**

@@ -380,7 +380,8 @@ export function buildRepairTask(original: DshTask, obs: RepairObservation, attem
     // 每次重跑都是不同的输入/会用不同的缓存键；singleflight 也不能把它合并掉。
     task: "【原始任务】\n" + original.task + "\n\n【第 " + attempt + " 次修正】\n" + lines.join("\n"),
     label: original.label ? `${original.label}#repair${attempt}` : `repair${attempt}`,
-    // 不继承 signal 的已 abort 状态；超时配额每一轮独立计算才有意义。
+    // 超时配额每轮重新计算：修复轮要重做卡住的那一步，配额不该被上一轮已经
+    // 消耗掉的时间吃掉。signal 仍然继承 —— 用户按下取消必须能中断修复。
     timeoutMs: original.timeoutMs,
   };
 }
@@ -398,7 +399,7 @@ export function clipAnswer(answer: string): string {
   return head + "\n\n…[中间 N 字符已省略]…\n\n" + tail;
 }
 
-/** 从运行结果里抽出 arrest data，组成自纠错能消费的观测。 */
+/** 从运行结果里抽出冰山下的客观痕迹，组成自纠错能消费的观测。 */
 export function observeResult(result: DshResult, attempt: number): RepairObservation {
   const violations =
     result.audit?.role?.violations.map((v) => ({ code: v.code, message: v.message, evidence: v.evidence })) ?? [];

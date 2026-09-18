@@ -48,8 +48,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / `thinkingTokenBudget` / `effort`.
 - Note: a run whose contract or verification failed is **not written to the
   result cache**, so a bad answer cannot be replayed for every later caller.
+- **Self-correction (`src/repair.ts`).** `task.selfRepair` turns a failed
+  acceptance into one more attempt that carries the *actual failure evidence*
+  (violated contract clauses, failing checks, a clipped excerpt of the previous
+  answer) back into the prompt, instead of handing the failure straight to the
+  caller. Accepts `true` (2 attempts, governed mode), a number, or a full policy.
+  Half of this module answers "is another round worth it": it refuses to retry
+  without objective judgement, refuses to retry deterministic crashes under the
+  default `governed` mode, and stops the moment a retry reproduces the identical
+  failure set. `result.audit.repair` reports `rescued` / `attemptsUsed` /
+  `stopReason` / `hint`. Same rules apply to DAG nodes via `node.selfRepair`.
 
 ### Fixed
+- **`route()` consumed a round-robin slot just to check availability.** The
+  pre-flight `pick()` advanced the round-robin cursor before the real dispatch
+  picked again, so consecutive calls landed on the same instance. Replaced with a
+  side-effect-free liveness check.
+- **`CostTracker` recomputed everything on every record.** Each `record()` did a
+  full-array filter plus five reductions, making N records O(N^2) — a long-lived
+  cluster got slower the longer it ran, and the dashboard recomputed the same
+  thing every 2s. Now incremental: `record()` is O(1) and the read paths derive
+  from per-instance aggregates. Detail records are capped at 5000 entries, but
+  accumulated totals survive trimming, so budget enforcement stays exact.
+- **`AutoScaler.events` grew without bound.** A background tick appending strings
+  forever is a slow leak on any cluster that runs for days; it is now a 500-entry
+  ring that keeps the most recent events.
 - **A crashed task no longer reports success.** `dsh` exits non-zero for hard
   failures (missing credentials, invalid flags, a crashed tool) and prints
   nothing on stdout. `summarize()` returned `{ answer: "", exitCode: 1 }` with

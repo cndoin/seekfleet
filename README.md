@@ -165,6 +165,47 @@ A contract violation becomes a **failure** (`error.code:
 "ROLE_CONTRACT_VIOLATION"` / `"VERIFY_FAILED"`), not a warning, and a run that
 failed its contract is never written to the result cache.
 
+### Self-correction: closing the loop
+
+Knowing a task failed is not the same as fixing it. With `selfRepair`, a failed
+acceptance becomes another attempt that carries **the actual failure evidence**
+(violated clauses, failing checks, a clipped excerpt of what it said last time)
+back into the prompt — the original goal is restated in front so the model does
+not drift.
+
+The hard part is deciding whether another round is worth paying for. LLM failures
+are not random: the same prompt and the same underspecified contract usually
+produce the same failure, and retrying just multiplies cost by N. So the loop
+refuses to retry when it should not:
+
+- **No objective judgement → no retry.** Without `role` or `verify` there is no
+  evidence about what went wrong, so there is nothing to correct
+  (`stopReason: "no_judgement"`).
+- **Crashes are not retried by default.** `EXIT_NONZERO` / `ABORTED` are
+  deterministic — the second attempt usually crashes too. Only "the model got it
+  wrong and we know exactly how" is worth another round; that is `"governed"`,
+  the default. `mode: "all"` opts back in.
+- **Identical failure → stop.** A retry that reproduces the same failure set means
+  the problem is in the input, not in the sampling (`"no_progress"`).
+- Bounded anyway: `maxAttempts` (hard cap 5), a per-round token ceiling, and an
+  instance rotation so a retry does not land back on the same bad instance.
+
+```js
+const fixed = await fleet.clusterRoute(id, {
+  task: "修复测试",
+  role: "worker",
+  verify: [{ kind: "command", argv: ["npm", "test"] }],
+  selfRepair: 2,               // true / number / { mode, maxAttempts, ... }
+});
+
+console.log(fixed.audit?.repair?.rescued);      // true = 第二轮补上了
+console.log(fixed.audit?.repair?.stopReason);   // ok | no_progress | max_attempts | ...
+console.log(fixed.audit?.repair?.hint);         // 停下来时给的结构性改动建议
+```
+
+`rescued: true` for a task is a signal, not a victory: something about that task's
+spec needed three passes. Fix the spec rather than raising `maxAttempts`.
+
 ```js
 import { SeekFleet } from "seekfleet";
 

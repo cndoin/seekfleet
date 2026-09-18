@@ -78,6 +78,9 @@ const workerResults = await Promise.all(
       effort: "medium",
       // worker 必须按 {status, summary} 交差 —— 空话不算完成。
       verify: [{ kind: "answer-min-length", min: 20, name: "必须给出实质总结" }],
+      // 验收不过时带证据再来一轮。这里值得重试，是因为上面配了客观的验收标准：
+      // 「总结太短」是模型能直接修的具体问题。没有判据的任务不该开这个开关。
+      selfRepair: 1,
     }),
   ),
 );
@@ -85,8 +88,13 @@ const workerResults = await Promise.all(
 for (const [i, r] of workerResults.entries()) {
   const s = subtasks[i];
   const status = r.error ? "FAILED " + r.error.code : "ok";
-  console.log("   -", s.id, "=>", status);
+  const repair = r.audit?.repair;
+  // 修了几次才过 —— 这是「任务规格不清楚」的信号，不是效率的胜利。
+  const rescued = repair?.rescued ? " (第 " + repair.attemptsUsed + " 轮修正后通过)" : "";
+  console.log("   -", s.id, "=>", status + rescued);
   if (r.audit?.role?.parsedOutput?.summary) console.log("       ", r.audit.role.parsedOutput.summary);
+  // 自纠错止步时带的 hint 通常比报错更有用：它说的是该改哪个结构。
+  if (repair && !repair.rescued && repair.hint) console.log("       hint:", repair.hint);
 }
 
 console.log("\n[step 3] reviewer 独立验收（禁止它自己动手改）");

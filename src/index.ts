@@ -92,6 +92,26 @@ export {
   type FailureSignal,
   type FailureAttribution,
 } from "./mast.js";
+export {
+  MAX_REPAIR_ATTEMPTS_HARD_CAP,
+  DEFAULT_REPAIR_POLICY,
+  RepairLoop,
+  buildRepairTask,
+  clipAnswer,
+  failureFingerprint,
+  isRepairableFailure,
+  normalizeRepairPolicy,
+  observeResult,
+  summarizeRepair,
+  type RepairAttemptRecord,
+  type RepairMode,
+  type RepairObservation,
+  type RepairOutcome,
+  type RepairPolicy,
+  type RepairPolicyInput,
+  type RepairStopReason,
+  type RepairVerdict,
+} from "./repair.js";
 export { ReplayRecorder, type ReplayFile, type ReplayHeader } from "./replay-recorder.js";
 export {
   codexInstall,
